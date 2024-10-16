@@ -1,34 +1,101 @@
 const std = @import("std");
 const gl = @import("gl");
 const glfw = @import("glfw");
+const m = @import("zalgebra");
 
-const vertexSrc =
-    \\#version 300 es
-    \\layout (location = 0) in vec3 aPos;
-    \\void main()
-    \\{
-    \\   gl_Position = vec4(aPos.x, aPos.y, aPos.z, 1.0);
-    \\}
-;
-const fragmentSrc =
-    \\#version 300 es
-    \\
-    \\precision mediump float;
-    \\
-    \\out vec4 FragColor;
-    \\
-    \\void main()
-    \\{
-    \\    FragColor = vec4(1.0f, 0.5f, 0.2f, 1.0f);
-    \\} 
-;
+const Camera = struct {
+    position: m.Vec3,
+    target: m.Vec3,
+    up: m.Vec3,
+    fovy: f32,
+    fn view(self: @This()) m.Mat4 {
+        m.lookAt(self.position, self.target, .{ 0, 1, 0 });
+    }
+    fn perspective(self: @This()) m.Mat4 {
+        m.perspective(self.fovy, 16 / 9, 0.5, 100);
+    }
+};
+
+fn Shader(Uniforms: type) type {
+    return struct {
+        id: u32,
+        locs: [std.meta.fields(Uniforms).len]i32,
+        fn infoLog(id: u32, comptime msg: []const u8) void {
+            var buff: [512:0]u8 = .{0} ** 512;
+            gl.GetShaderInfoLog(id, 512, null, &buff);
+            std.log.err(msg, .{buff[0..std.mem.len(@as([*:0]u8, &buff))]});
+        }
+        fn init(vsFile: []const u8, fsFile: []const u8) !@This() {
+            var success: i32 = undefined;
+            const vs = vs: {
+                const vertexSrc = src: {
+                    var file = try std.fs.cwd().openFile(vsFile, .{});
+                    defer file.close();
+                    break :src try file.readToEndAlloc(std.heap.c_allocator, 100000);
+                };
+                const vs: u32 = gl.CreateShader(gl.VERTEX_SHADER);
+                gl.ShaderSource(vs, 1, &.{vertexSrc.ptr}, null);
+                gl.CompileShader(vs);
+                gl.GetShaderiv(vs, gl.COMPILE_STATUS, &success);
+                if (success == 0) infoLog(vs, "Shader didn't compile: {s}");
+                break :vs vs;
+            };
+
+            const fs = fs: {
+                const fragmentSrc = src: {
+                    var file = try std.fs.cwd().openFile(fsFile, .{});
+                    defer file.close();
+                    break :src try file.readToEndAlloc(std.heap.c_allocator, 100000);
+                };
+                const fs: u32 = gl.CreateShader(gl.FRAGMENT_SHADER);
+                gl.ShaderSource(fs, 1, &.{fragmentSrc.ptr}, null);
+                gl.CompileShader(fs);
+                gl.GetShaderiv(fs, gl.COMPILE_STATUS, &success);
+                if (success == 0) infoLog(fs, "Shader didn't compile: {s}");
+                break :fs fs;
+            };
+            const sh = sh: {
+                const sh: u32 = gl.CreateProgram();
+                gl.AttachShader(sh, vs);
+                gl.AttachShader(sh, fs);
+                gl.DeleteShader(vs);
+                gl.DeleteShader(fs);
+                gl.LinkProgram(sh);
+                gl.GetProgramiv(sh, gl.LINK_STATUS, &success);
+                if (success == 0) infoLog(sh, "Shader didn't link {s}");
+                break :sh sh;
+            };
+            var locs: [std.meta.fields(Uniforms).len]i32 = undefined;
+            inline for (std.meta.fieldNames(Uniforms), 0..) |uname, i|
+                locs[i] = gl.GetUniformLocation(sh, uname);
+            return .{ .id = sh, .locs = locs };
+        }
+        fn set(loc: i32, value: anytype) void {
+            if (@TypeOf(value) == m.Vec4) {
+                gl.Uniform4f(loc, value.x(), value.y(), value.z(), value.w());
+            } else @compileError("Unknown type!");
+        }
+        fn use(self: @This(), uniforms: Uniforms) void {
+            gl.UseProgram(self.id);
+            inline for (std.meta.fields(Uniforms), 0..) |field, i| {
+                const val = @field(uniforms, field.name);
+                set(self.locs[i], val);
+            }
+        }
+        fn deinit(self: @This()) void {
+            gl.DeleteProgram(self.id);
+        }
+    };
+}
+
+const Sh = Shader(struct { color: m.Vec4 });
 
 const Triangle = struct {
     VAO: u32,
     VBO: u32,
     EBO: u32,
-    sh: u32,
-    fn init() @This() {
+    sh: Sh,
+    fn init() !@This() {
         const vertices = [_]f32{
             0.5, 0.5, 0.0, // top right
             0.5, -0.5, 0.0, // bottom right
@@ -60,50 +127,12 @@ const Triangle = struct {
             gl.VertexAttribPointer(0, 3, gl.FLOAT, gl.FALSE, 3 * @sizeOf(f32), 0);
             gl.EnableVertexAttribArray(0);
         }
-        const vs = vs: {
-            const vs: u32 = gl.CreateShader(gl.VERTEX_SHADER);
-            gl.ShaderSource(vs, 1, &.{vertexSrc}, null);
-            gl.CompileShader(vs);
-            var success: i32 = undefined;
-            gl.GetShaderiv(vs, gl.COMPILE_STATUS, &success);
-            if (success == 0) {
-                var infoLog: [512:0]u8 = .{0} ** 512;
-                gl.GetShaderInfoLog(vs, 512, null, &infoLog);
-                std.log.err("Shader didn't compile: {s}", .{infoLog[0..std.mem.len(@as([*:0]u8, &infoLog))]});
-            }
-            break :vs vs;
+        return .{
+            .VAO = VAO,
+            .VBO = VBO,
+            .EBO = EBO,
+            .sh = try Sh.init("src/vertex.glsl", "src/fragment.glsl"),
         };
-
-        const fs = fs: {
-            const fs: u32 = gl.CreateShader(gl.FRAGMENT_SHADER);
-            gl.ShaderSource(fs, 1, &.{fragmentSrc}, null);
-            gl.CompileShader(fs);
-            var success: i32 = undefined;
-            gl.GetShaderiv(fs, gl.COMPILE_STATUS, &success);
-            if (success == 0) {
-                var infoLog: [512:0]u8 = .{0} ** 512;
-                gl.GetShaderInfoLog(fs, 512, null, &infoLog);
-                std.log.err("Shader didn't compile: {s}", .{infoLog[0..std.mem.len(@as([*:0]u8, &infoLog))]});
-            }
-            break :fs fs;
-        };
-        const sh = sh: {
-            const sh: u32 = gl.CreateProgram();
-            gl.AttachShader(sh, vs);
-            gl.AttachShader(sh, fs);
-            gl.DeleteShader(vs);
-            gl.DeleteShader(fs);
-            gl.LinkProgram(sh);
-            var success: i32 = undefined;
-            gl.GetProgramiv(sh, gl.LINK_STATUS, &success);
-            if (success == 0) {
-                var infoLog: [512:0]u8 = .{0} ** 512;
-                gl.GetShaderInfoLog(sh, 512, null, &infoLog);
-                std.log.err("Shader didn't link: {s}", .{infoLog[0..std.mem.len(@as([*:0]u8, &infoLog))]});
-            }
-            break :sh sh;
-        };
-        return .{ .VAO = VAO, .VBO = VBO, .EBO = EBO, .sh = sh };
     }
     fn deinit(self: @This()) void {
         var VAO = [_]u32{self.VAO};
@@ -112,17 +141,20 @@ const Triangle = struct {
         gl.DeleteVertexArrays(1, &VAO);
         gl.DeleteBuffers(1, &VBO);
         gl.DeleteBuffers(1, &EBO);
-        gl.DeleteProgram(self.sh);
+        self.sh.deinit();
     }
     fn draw(self: @This()) void {
         gl.BindVertexArray(self.VAO);
-        gl.UseProgram(self.sh);
+        self.sh.use(.{ .color = m.Vec4.new(1, 1, 0, 0) });
         gl.DrawElements(gl.TRIANGLES, 6, gl.UNSIGNED_INT, 0);
     }
 };
 
 var procs: gl.ProcTable = undefined;
 pub fn main() !void {
+    // var ally = std.heap.GeneralPurposeAllocator(.{}){};
+    // const allocator = ally.allocator();
+
     try glfw.init();
     defer glfw.terminate();
 
@@ -136,7 +168,7 @@ pub fn main() !void {
     gl.makeProcTableCurrent(&procs);
     defer gl.makeProcTableCurrent(null);
 
-    var t = Triangle.init();
+    var t = try Triangle.init();
     defer t.deinit();
 
     // gl.PolygonMode(gl.FRONT_AND_BACK, gl.LINE);
