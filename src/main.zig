@@ -90,63 +90,107 @@ fn Shader(Uniforms: type) type {
 
 const Sh = Shader(struct { color: m.Vec4 });
 
+fn Mesh(Vertex: type) type {
+    return struct {
+        VAO: u32,
+        VBO: u32,
+        EBO: u32,
+        fn init(vertices: []const Vertex, indices: []const u32) @This() {
+            const VBO: u32 = x: {
+                var x: [1]u32 = undefined;
+                gl.GenBuffers(1, &x);
+                break :x x[0];
+            };
+            const EBO: u32 = x: {
+                var x: [1]u32 = undefined;
+                gl.GenBuffers(1, &x);
+                break :x x[0];
+            };
+            const VAO: u32 = x: {
+                var x: [1]u32 = undefined;
+                gl.GenVertexArrays(1, &x);
+                break :x x[0];
+            };
+            {
+                gl.BindVertexArray(VAO);
+                gl.BindBuffer(gl.ARRAY_BUFFER, VBO);
+                gl.BufferData(gl.ARRAY_BUFFER, @sizeOf(Vertex) * @as(i64, @intCast(vertices.len)), vertices.ptr, gl.STATIC_DRAW);
+                gl.BindBuffer(gl.ELEMENT_ARRAY_BUFFER, EBO);
+                gl.BufferData(gl.ELEMENT_ARRAY_BUFFER, @sizeOf(u32) * @as(i64, @intCast(indices.len)), indices.ptr, gl.STATIC_DRAW);
+                var stride: i32 = 0;
+                inline for (std.meta.fields(Vertex)) |field|
+                    if (field.type == Vec2) {
+                        stride += 2 * @sizeOf(f32);
+                    } else if (field.type == Vec3) {
+                        stride += 3 * @sizeOf(f32);
+                    } else if (field.type == Vec4) {
+                        stride += 4 * @sizeOf(f32);
+                    } else @compileError("Vertex can have only fields of `VecN` type");
+
+                var ptr: usize = 0;
+                inline for (std.meta.fields(Vertex), 0..) |field, i|
+                    if (field.type == Vec2) {
+                        gl.VertexAttribPointer(i, 2, gl.FLOAT, gl.FALSE, stride, ptr);
+                        gl.EnableVertexAttribArray(i);
+                        ptr += 2 * @sizeOf(f32);
+                    } else if (field.type == Vec3) {
+                        gl.VertexAttribPointer(i, 3, gl.FLOAT, gl.FALSE, stride, ptr);
+                        gl.EnableVertexAttribArray(i);
+                        ptr += 3 * @sizeOf(f32);
+                    } else if (field.type == Vec4) {
+                        gl.VertexAttribPointer(i, 4, gl.FLOAT, gl.FALSE, stride, ptr);
+                        gl.EnableVertexAttribArray(i);
+                        ptr += 4 * @sizeOf(f32);
+                    } else @compileError("Vertex can have only fields of `VecN` type");
+            }
+            return .{ .VAO = VAO, .VBO = VBO, .EBO = EBO };
+        }
+        fn deinit(self: @This()) void {
+            var VAO = [_]u32{self.VAO};
+            var VBO = [_]u32{self.VBO};
+            var EBO = [_]u32{self.EBO};
+            gl.DeleteVertexArrays(1, &VAO);
+            gl.DeleteBuffers(1, &VBO);
+            gl.DeleteBuffers(1, &EBO);
+        }
+        fn use(self: @This()) void {
+            gl.BindVertexArray(self.VAO);
+        }
+        fn draw(_: @This()) void {
+            gl.DrawElements(gl.TRIANGLES, 6, gl.UNSIGNED_INT, 0);
+        }
+    };
+}
+
+const Vec2 = struct { f32, f32 };
+const Vec3 = struct { f32, f32, f32 };
+const Vec4 = struct { f32, f32, f32, f32 };
+
 const Triangle = struct {
-    VAO: u32,
-    VBO: u32,
-    EBO: u32,
+    const Vertex = struct { aPos: Vec3 };
     sh: Sh,
+    mesh: Mesh(Vertex),
     fn init() !@This() {
-        const vertices = [_]f32{
-            0.5, 0.5, 0.0, // top right
-            0.5, -0.5, 0.0, // bottom right
-            -0.5, -0.5, 0.0, // bottom left
-            -0.5, 0.5, 0.0, // top left
+        const vertices = [_]Vertex{
+            .{ .aPos = .{ 0.5, 0.5, 0.0 } },
+            .{ .aPos = .{ 0.5, -0.5, 0.0 } },
+            .{ .aPos = .{ -0.5, -0.5, 0.0 } },
+            .{ .aPos = .{ -0.5, 0.5, 0.0 } },
         };
         const indices = [_]u32{ 0, 1, 3, 1, 2, 3 };
-        const VBO: u32 = x: {
-            var x: [1]u32 = undefined;
-            gl.GenBuffers(1, &x);
-            break :x x[0];
-        };
-        const EBO: u32 = x: {
-            var x: [1]u32 = undefined;
-            gl.GenBuffers(1, &x);
-            break :x x[0];
-        };
-        const VAO: u32 = x: {
-            var x: [1]u32 = undefined;
-            gl.GenVertexArrays(1, &x);
-            break :x x[0];
-        };
-        {
-            gl.BindVertexArray(VAO);
-            gl.BindBuffer(gl.ARRAY_BUFFER, VBO);
-            gl.BufferData(gl.ARRAY_BUFFER, @sizeOf(@TypeOf(vertices)), &vertices, gl.STATIC_DRAW);
-            gl.BindBuffer(gl.ELEMENT_ARRAY_BUFFER, EBO);
-            gl.BufferData(gl.ELEMENT_ARRAY_BUFFER, @sizeOf(@TypeOf(indices)), &indices, gl.STATIC_DRAW);
-            gl.VertexAttribPointer(0, 3, gl.FLOAT, gl.FALSE, 3 * @sizeOf(f32), 0);
-            gl.EnableVertexAttribArray(0);
-        }
         return .{
-            .VAO = VAO,
-            .VBO = VBO,
-            .EBO = EBO,
             .sh = try Sh.init("src/vertex.glsl", "src/fragment.glsl"),
+            .mesh = Mesh(Vertex).init(&vertices, &indices),
         };
     }
     fn deinit(self: @This()) void {
-        var VAO = [_]u32{self.VAO};
-        var VBO = [_]u32{self.VBO};
-        var EBO = [_]u32{self.EBO};
-        gl.DeleteVertexArrays(1, &VAO);
-        gl.DeleteBuffers(1, &VBO);
-        gl.DeleteBuffers(1, &EBO);
+        self.mesh.deinit();
         self.sh.deinit();
     }
     fn draw(self: @This()) void {
-        gl.BindVertexArray(self.VAO);
         self.sh.use(.{ .color = m.Vec4.new(1, 1, 0, 0) });
-        gl.DrawElements(gl.TRIANGLES, 6, gl.UNSIGNED_INT, 0);
+        self.mesh.use();
+        self.mesh.draw();
     }
 };
 
