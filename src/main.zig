@@ -16,7 +16,7 @@ const Camera = struct {
     }
 };
 
-fn Shader(Uniforms: type) type {
+fn Shader(Uniforms: type, Vertex: type) type {
     return struct {
         id: u32,
         locs: [std.meta.fields(Uniforms).len]i32,
@@ -25,14 +25,27 @@ fn Shader(Uniforms: type) type {
             gl.GetShaderInfoLog(id, 512, null, &buff);
             std.log.err(msg, .{buff[0..std.mem.len(@as([*:0]u8, &buff))]});
         }
+        fn fileContent(fileName: []const u8) ![]u8 {
+            var file = try std.fs.cwd().openFile(fileName, .{});
+            defer file.close();
+            return try file.readToEndAlloc(std.heap.c_allocator, 100000);
+        }
         fn init(vsFile: []const u8, fsFile: []const u8) !@This() {
+            _ = Vertex;
+            const vertexSrc = try std.mem.join(std.heap.page_allocator, "\n", &.{
+                "#version 320 es",
+                "layout (location = 0) in vec3 aPos;",
+                try fileContent(vsFile),
+            });
+            const fragmentSrc = try std.mem.join(std.heap.page_allocator, "\n", &.{
+                "#version 320 es",
+                "precision mediump float;",
+                "out vec4 FragColor;",
+                "uniform vec4 color;",
+                try fileContent(fsFile),
+            });
             var success: i32 = undefined;
             const vs = vs: {
-                const vertexSrc = src: {
-                    var file = try std.fs.cwd().openFile(vsFile, .{});
-                    defer file.close();
-                    break :src try file.readToEndAlloc(std.heap.c_allocator, 100000);
-                };
                 const vs: u32 = gl.CreateShader(gl.VERTEX_SHADER);
                 gl.ShaderSource(vs, 1, &.{vertexSrc.ptr}, null);
                 gl.CompileShader(vs);
@@ -42,11 +55,6 @@ fn Shader(Uniforms: type) type {
             };
 
             const fs = fs: {
-                const fragmentSrc = src: {
-                    var file = try std.fs.cwd().openFile(fsFile, .{});
-                    defer file.close();
-                    break :src try file.readToEndAlloc(std.heap.c_allocator, 100000);
-                };
                 const fs: u32 = gl.CreateShader(gl.FRAGMENT_SHADER);
                 gl.ShaderSource(fs, 1, &.{fragmentSrc.ptr}, null);
                 gl.CompileShader(fs);
@@ -87,12 +95,14 @@ fn Shader(Uniforms: type) type {
         }
     };
 }
+const Triangle = struct { u32, u32, u32 };
 fn Mesh(Vertex: type) type {
     return struct {
         VAO: u32,
         VBO: u32,
         EBO: u32,
-        fn init(vertices: []const Vertex, indices: []const u32) @This() {
+        triCount: i32,
+        fn init(vertices: []const Vertex, indices: []const Triangle) @This() {
             const VBO: u32 = x: {
                 var x: [1]u32 = undefined;
                 gl.GenBuffers(1, &x);
@@ -113,7 +123,7 @@ fn Mesh(Vertex: type) type {
                 gl.BindBuffer(gl.ARRAY_BUFFER, VBO);
                 gl.BufferData(gl.ARRAY_BUFFER, @sizeOf(Vertex) * @as(i64, @intCast(vertices.len)), vertices.ptr, gl.STATIC_DRAW);
                 gl.BindBuffer(gl.ELEMENT_ARRAY_BUFFER, EBO);
-                gl.BufferData(gl.ELEMENT_ARRAY_BUFFER, @sizeOf(u32) * @as(i64, @intCast(indices.len)), indices.ptr, gl.STATIC_DRAW);
+                gl.BufferData(gl.ELEMENT_ARRAY_BUFFER, @sizeOf(Triangle) * @as(i64, @intCast(indices.len)), indices.ptr, gl.STATIC_DRAW);
                 var ptr: usize = 0;
                 inline for (std.meta.fields(Vertex), 0..) |field, i|
                     if (field.type == Vec2) {
@@ -130,7 +140,7 @@ fn Mesh(Vertex: type) type {
                         ptr += @sizeOf(Vec4);
                     } else @compileError("Vertex can have only fields of `VecN` type");
             }
-            return .{ .VAO = VAO, .VBO = VBO, .EBO = EBO };
+            return .{ .VAO = VAO, .VBO = VBO, .EBO = EBO, .triCount = @intCast(indices.len) };
         }
         fn deinit(self: @This()) void {
             var VAO = [_]u32{self.VAO};
@@ -143,8 +153,8 @@ fn Mesh(Vertex: type) type {
         fn use(self: @This()) void {
             gl.BindVertexArray(self.VAO);
         }
-        fn draw(_: @This()) void {
-            gl.DrawElements(gl.TRIANGLES, 6, gl.UNSIGNED_INT, 0);
+        fn draw(self: @This()) void {
+            gl.DrawElements(gl.TRIANGLES, 3 * self.triCount, gl.UNSIGNED_INT, 0);
         }
     };
 }
@@ -153,10 +163,10 @@ const Vec2 = @Vector(2, f32);
 const Vec3 = @Vector(3, f32);
 const Vec4 = @Vector(4, f32);
 
-const Triangle = struct {
+const Quad = struct {
     const Vertex = struct { aPos: Vec3 };
     const Uniforms = struct { color: m.Vec4 };
-    sh: Shader(Uniforms),
+    sh: Shader(Uniforms, Vertex),
     mesh: Mesh(Vertex),
     fn init() !@This() {
         const vertices = [_]Vertex{
@@ -165,9 +175,9 @@ const Triangle = struct {
             .{ .aPos = .{ -0.5, -0.5, 0.0 } },
             .{ .aPos = .{ -0.5, 0.5, 0.0 } },
         };
-        const indices = [_]u32{ 0, 1, 3, 1, 2, 3 };
+        const indices = [_]Triangle{ .{ 0, 1, 3 }, .{ 1, 2, 3 } };
         return .{
-            .sh = try Shader(Uniforms).init("src/vertex.glsl", "src/fragment.glsl"),
+            .sh = try Shader(Uniforms, Vertex).init("src/vertex.glsl", "src/fragment.glsl"),
             .mesh = Mesh(Vertex).init(&vertices, &indices),
         };
     }
@@ -200,7 +210,7 @@ pub fn main() !void {
     gl.makeProcTableCurrent(&procs);
     defer gl.makeProcTableCurrent(null);
 
-    var t = try Triangle.init();
+    var t = try Quad.init();
     defer t.deinit();
 
     // gl.PolygonMode(gl.FRONT_AND_BACK, gl.LINE);
