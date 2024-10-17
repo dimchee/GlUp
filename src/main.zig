@@ -87,9 +87,6 @@ fn Shader(Uniforms: type) type {
         }
     };
 }
-
-const Sh = Shader(struct { color: m.Vec4 });
-
 fn Mesh(Vertex: type) type {
     return struct {
         VAO: u32,
@@ -117,30 +114,20 @@ fn Mesh(Vertex: type) type {
                 gl.BufferData(gl.ARRAY_BUFFER, @sizeOf(Vertex) * @as(i64, @intCast(vertices.len)), vertices.ptr, gl.STATIC_DRAW);
                 gl.BindBuffer(gl.ELEMENT_ARRAY_BUFFER, EBO);
                 gl.BufferData(gl.ELEMENT_ARRAY_BUFFER, @sizeOf(u32) * @as(i64, @intCast(indices.len)), indices.ptr, gl.STATIC_DRAW);
-                var stride: i32 = 0;
-                inline for (std.meta.fields(Vertex)) |field|
-                    if (field.type == Vec2) {
-                        stride += 2 * @sizeOf(f32);
-                    } else if (field.type == Vec3) {
-                        stride += 3 * @sizeOf(f32);
-                    } else if (field.type == Vec4) {
-                        stride += 4 * @sizeOf(f32);
-                    } else @compileError("Vertex can have only fields of `VecN` type");
-
                 var ptr: usize = 0;
                 inline for (std.meta.fields(Vertex), 0..) |field, i|
                     if (field.type == Vec2) {
-                        gl.VertexAttribPointer(i, 2, gl.FLOAT, gl.FALSE, stride, ptr);
+                        gl.VertexAttribPointer(i, 2, gl.FLOAT, gl.FALSE, @sizeOf(Vertex), ptr);
                         gl.EnableVertexAttribArray(i);
-                        ptr += 2 * @sizeOf(f32);
+                        ptr += @sizeOf(Vec2);
                     } else if (field.type == Vec3) {
-                        gl.VertexAttribPointer(i, 3, gl.FLOAT, gl.FALSE, stride, ptr);
+                        gl.VertexAttribPointer(i, 3, gl.FLOAT, gl.FALSE, @sizeOf(Vertex), ptr);
                         gl.EnableVertexAttribArray(i);
-                        ptr += 3 * @sizeOf(f32);
+                        ptr += @sizeOf(Vec3);
                     } else if (field.type == Vec4) {
-                        gl.VertexAttribPointer(i, 4, gl.FLOAT, gl.FALSE, stride, ptr);
+                        gl.VertexAttribPointer(i, 4, gl.FLOAT, gl.FALSE, @sizeOf(Vertex), ptr);
                         gl.EnableVertexAttribArray(i);
-                        ptr += 4 * @sizeOf(f32);
+                        ptr += @sizeOf(Vec4);
                     } else @compileError("Vertex can have only fields of `VecN` type");
             }
             return .{ .VAO = VAO, .VBO = VBO, .EBO = EBO };
@@ -162,13 +149,14 @@ fn Mesh(Vertex: type) type {
     };
 }
 
-const Vec2 = struct { f32, f32 };
-const Vec3 = struct { f32, f32, f32 };
-const Vec4 = struct { f32, f32, f32, f32 };
+const Vec2 = @Vector(2, f32);
+const Vec3 = @Vector(3, f32);
+const Vec4 = @Vector(4, f32);
 
 const Triangle = struct {
     const Vertex = struct { aPos: Vec3 };
-    sh: Sh,
+    const Uniforms = struct { color: m.Vec4 };
+    sh: Shader(Uniforms),
     mesh: Mesh(Vertex),
     fn init() !@This() {
         const vertices = [_]Vertex{
@@ -179,7 +167,7 @@ const Triangle = struct {
         };
         const indices = [_]u32{ 0, 1, 3, 1, 2, 3 };
         return .{
-            .sh = try Sh.init("src/vertex.glsl", "src/fragment.glsl"),
+            .sh = try Shader(Uniforms).init("src/vertex.glsl", "src/fragment.glsl"),
             .mesh = Mesh(Vertex).init(&vertices, &indices),
         };
     }
