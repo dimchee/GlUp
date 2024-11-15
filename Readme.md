@@ -1,3 +1,5 @@
+# GlUp - Stupidly Simple OpenGL library for Zig
+
 # ToDo
 - use [zm](https://github.com/griush/zm)
 
