@@ -2,6 +2,7 @@ const std = @import("std");
 const gl = @import("gl");
 const glfw = @import("glfw");
 const m = @import("zalgebra");
+const zigimg = @import("zigimg");
 
 const Camera = struct {
     position: m.Vec3,
@@ -13,6 +14,29 @@ const Camera = struct {
     }
     fn perspective(self: @This()) m.Mat4 {
         m.perspective(self.fovy, 16 / 9, 0.5, 100);
+    }
+};
+
+const Texture = struct {
+    id: u32,
+    fn init(filePath: []const u8) !@This() {
+        const id = x: {
+            var x: [1]u32 = undefined;
+            gl.GenTextures(1, &x);
+            break :x x[0];
+        };
+        gl.BindTexture(gl.TEXTURE_2D, id);
+        // set the texture wrapping/filtering options (on the currently bound texture object)
+        gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.REPEAT);
+        gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.REPEAT);
+        gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR);
+        gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+        // load and generate the texture
+        var image = try zigimg.Image.fromFilePath(std.heap.c_allocator, filePath);
+        defer image.deinit();
+        gl.TexImage2D(gl.TEXTURE_2D, 0, gl.RGB, @intCast(image.width), @intCast(image.height), 0, gl.RGB, gl.UNSIGNED_BYTE, image.rawBytes().ptr);
+        gl.GenerateMipmap(gl.TEXTURE_2D);
+        return .{ .id = id };
     }
 };
 
@@ -30,18 +54,50 @@ fn Shader(Uniforms: type, Vertex: type) type {
             defer file.close();
             return try file.readToEndAlloc(std.heap.c_allocator, 100000);
         }
+        fn toType(t: type) []const u8 {
+            return if (t == @Vector(4, f32))
+                "vec4"
+            else if (t == @Vector(3, f32))
+                "vec3"
+            else if (t == @Vector(2, f32))
+                "vec2"
+            else if (t == f32)
+                "float"
+            else if (t == ?Texture)
+                "sampler2D"
+            else
+                @compileError("Unknown type");
+        }
+        fn attributes() []const u8 {
+            comptime {
+                var sol: []const u8 = "";
+                for (std.meta.fields(Vertex), 0..) |field, i|
+                    sol = sol ++ std.fmt.comptimePrint("\nlayout (location = {}) in {s} {s};", .{ i, toType(field.type), field.name });
+                return sol;
+            }
+        }
+        fn uniforms() []const u8 {
+            comptime {
+                var sol: []const u8 = "";
+                for (std.meta.fields(Uniforms)) |field|
+                    sol = sol ++ std.fmt.comptimePrint("\nuniform {s} {s};", .{ toType(field.type), field.name });
+                return sol;
+            }
+        }
         fn init(vsFile: []const u8, fsFile: []const u8) !@This() {
-            _ = Vertex;
             const vertexSrc = try std.mem.join(std.heap.page_allocator, "\n", &.{
                 "#version 320 es",
-                "layout (location = 0) in vec3 aPos;",
+                "out vec2 TexCoord;",
+                comptime attributes(),
                 try fileContent(vsFile),
             });
             const fragmentSrc = try std.mem.join(std.heap.page_allocator, "\n", &.{
                 "#version 320 es",
                 "precision mediump float;",
                 "out vec4 FragColor;",
-                "uniform vec4 color;",
+                "in vec2 TexCoord;",
+                comptime uniforms(),
+                // "uniform vec4 color;",
                 try fileContent(fsFile),
             });
             var success: i32 = undefined;
@@ -79,14 +135,18 @@ fn Shader(Uniforms: type, Vertex: type) type {
             return .{ .id = sh, .locs = locs };
         }
         fn set(loc: i32, value: anytype) void {
-            if (@TypeOf(value) == m.Vec4) {
-                gl.Uniform4f(loc, value.x(), value.y(), value.z(), value.w());
-            } else @compileError("Unknown type!");
+            if (@TypeOf(value) == @Vector(4, f32))
+                gl.Uniform4f(loc, value[0], value[1], value[2], value[3])
+            else if (@TypeOf(value) == ?Texture)
+                _ = 3
+                // std.debug.print("Texture...", .{})
+            else
+                @compileError("Unknown type!");
         }
-        fn use(self: @This(), uniforms: Uniforms) void {
+        fn use(self: @This(), us: Uniforms) void {
             gl.UseProgram(self.id);
             inline for (std.meta.fields(Uniforms), 0..) |field, i| {
-                const val = @field(uniforms, field.name);
+                const val = @field(us, field.name);
                 set(self.locs[i], val);
             }
         }
@@ -164,17 +224,18 @@ const Vec3 = @Vector(3, f32);
 const Vec4 = @Vector(4, f32);
 
 const Quad = struct {
-    const Vertex = struct { aPos: Vec3 };
-    const Uniforms = struct { color: m.Vec4 };
+    const Vertex = struct { aPos: Vec3, aTexCoord: Vec2 };
+    const Uniforms = struct { color: Vec4, texture0: ?Texture };
     sh: Shader(Uniforms, Vertex),
     mesh: Mesh(Vertex),
     fn init() !@This() {
         const vertices = [_]Vertex{
-            .{ .aPos = .{ 0.5, 0.5, 0.0 } },
-            .{ .aPos = .{ 0.5, -0.5, 0.0 } },
-            .{ .aPos = .{ -0.5, -0.5, 0.0 } },
-            .{ .aPos = .{ -0.5, 0.5, 0.0 } },
+            .{ .aPos = .{ 0.5, 0.5, 0.0 }, .aTexCoord = .{ 1, 1 } },
+            .{ .aPos = .{ 0.5, -0.5, 0.0 }, .aTexCoord = .{ 1, 0 } },
+            .{ .aPos = .{ -0.5, -0.5, 0.0 }, .aTexCoord = .{ 0, 0 } },
+            .{ .aPos = .{ -0.5, 0.5, 0.0 }, .aTexCoord = .{ 0, 1 } },
         };
+        _ = try Texture.init("tile.png");
         const indices = [_]Triangle{ .{ 0, 1, 3 }, .{ 1, 2, 3 } };
         return .{
             .sh = try Shader(Uniforms, Vertex).init("src/vertex.glsl", "src/fragment.glsl"),
@@ -186,7 +247,7 @@ const Quad = struct {
         self.sh.deinit();
     }
     fn draw(self: @This()) void {
-        self.sh.use(.{ .color = m.Vec4.new(1, 1, 0, 0) });
+        self.sh.use(.{ .color = .{ 1, 1, 0, 0 }, .texture0 = null });
         self.mesh.use();
         self.mesh.draw();
     }
@@ -194,8 +255,10 @@ const Quad = struct {
 
 var procs: gl.ProcTable = undefined;
 pub fn main() !void {
-    // var ally = std.heap.GeneralPurposeAllocator(.{}){};
-    // const allocator = ally.allocator();
+    // const Vertex = struct { aPos: Vec3 };
+    // const Uniforms = struct { color: m.Vec4 };
+    // const sh = try Shader(Uniforms, Vertex).init("src/vertex.glsl", "src/fragment.glsl");
+    // std.debug.print("{s}\n", .{comptime Shader(Uniforms, Vertex).attributes()});
 
     try glfw.init();
     defer glfw.terminate();

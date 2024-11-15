@@ -13,9 +13,11 @@ pub fn build(b: *std.Build) void {
     const gl_bindings = @import("zigglgen").generateBindingsModule(b, .{ .api = .gles, .version = .@"3.2" });
     const glfw = b.dependency("zglfw", .{ .target = target, .optimize = optimize });
     const zalgebra = b.dependency("zalgebra", .{ .target = target, .optimize = optimize });
+    const zigimg = b.dependency("zigimg", .{ .target = target, .optimize = optimize });
     exe.root_module.addImport("gl", gl_bindings);
     exe.root_module.addImport("glfw", glfw.module("glfw"));
     exe.root_module.addImport("zalgebra", zalgebra.module("zalgebra"));
+    exe.root_module.addImport("zigimg", zigimg.module("zigimg"));
     exe.linkLibrary(glfw.artifact("zglfw"));
 
     b.installArtifact(exe);
