@@ -4,6 +4,8 @@ const glfw = @import("glfw");
 const m = @import("zalgebra");
 const zigimg = @import("zigimg");
 
+const FPS = 60.0;
+
 const Camera = struct {
     position: m.Vec3,
     target: m.Vec3,
@@ -25,6 +27,7 @@ const Texture = struct {
             gl.GenTextures(1, &x);
             break :x x[0];
         };
+        gl.ActiveTexture(gl.TEXTURE0); // save tex slot so you can bind it
         gl.BindTexture(gl.TEXTURE_2D, id);
         // set the texture wrapping/filtering options (on the currently bound texture object)
         gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.REPEAT);
@@ -40,10 +43,11 @@ const Texture = struct {
     }
 };
 
-fn Shader(Uniforms: type, Vertex: type) type {
+fn Shader(VUniforms: type, FUniforms: type, Vertex: type) type {
     return struct {
         id: u32,
-        locs: [std.meta.fields(Uniforms).len]i32,
+        flocs: [std.meta.fields(FUniforms).len]i32,
+        vlocs: [std.meta.fields(VUniforms).len]i32,
         fn infoLog(id: u32, comptime msg: []const u8) void {
             var buff: [512:0]u8 = .{0} ** 512;
             gl.GetShaderInfoLog(id, 512, null, &buff);
@@ -76,7 +80,7 @@ fn Shader(Uniforms: type, Vertex: type) type {
                 return sol;
             }
         }
-        fn uniforms() []const u8 {
+        fn uniforms(Uniforms: type) []const u8 {
             comptime {
                 var sol: []const u8 = "";
                 for (std.meta.fields(Uniforms)) |field|
@@ -89,6 +93,7 @@ fn Shader(Uniforms: type, Vertex: type) type {
                 "#version 320 es",
                 "out vec2 TexCoord;",
                 comptime attributes(),
+                comptime uniforms(VUniforms),
                 try fileContent(vsFile),
             });
             const fragmentSrc = try std.mem.join(std.heap.page_allocator, "\n", &.{
@@ -96,8 +101,7 @@ fn Shader(Uniforms: type, Vertex: type) type {
                 "precision mediump float;",
                 "out vec4 FragColor;",
                 "in vec2 TexCoord;",
-                comptime uniforms(),
-                // "uniform vec4 color;",
+                comptime uniforms(FUniforms),
                 try fileContent(fsFile),
             });
             var success: i32 = undefined;
@@ -129,25 +133,36 @@ fn Shader(Uniforms: type, Vertex: type) type {
                 if (success == 0) infoLog(sh, "Shader didn't link {s}");
                 break :sh sh;
             };
-            var locs: [std.meta.fields(Uniforms).len]i32 = undefined;
-            inline for (std.meta.fieldNames(Uniforms), 0..) |uname, i|
-                locs[i] = gl.GetUniformLocation(sh, uname);
-            return .{ .id = sh, .locs = locs };
+            var flocs: [std.meta.fields(FUniforms).len]i32 = undefined;
+            var vlocs: [std.meta.fields(VUniforms).len]i32 = undefined;
+            inline for (std.meta.fieldNames(FUniforms), 0..) |uname, i|
+                flocs[i] = gl.GetUniformLocation(sh, uname);
+            inline for (std.meta.fieldNames(VUniforms), 0..) |uname, i|
+                vlocs[i] = gl.GetUniformLocation(sh, uname);
+            return .{ .id = sh, .flocs = flocs, .vlocs = vlocs };
         }
         fn set(loc: i32, value: anytype) void {
             if (@TypeOf(value) == @Vector(4, f32))
                 gl.Uniform4f(loc, value[0], value[1], value[2], value[3])
+            else if (@TypeOf(value) == @Vector(3, f32))
+                gl.Uniform3f(loc, value[0], value[1], value[2])
+            else if (@TypeOf(value) == @Vector(2, f32))
+                gl.Uniform2f(loc, value[0], value[1])
             else if (@TypeOf(value) == ?Texture)
-                _ = 3
+                gl.Uniform1i(loc, 0)
                 // std.debug.print("Texture...", .{})
             else
                 @compileError("Unknown type!");
         }
-        fn use(self: @This(), us: Uniforms) void {
+        fn use(self: @This(), vus: VUniforms, fus: FUniforms) void {
             gl.UseProgram(self.id);
-            inline for (std.meta.fields(Uniforms), 0..) |field, i| {
-                const val = @field(us, field.name);
-                set(self.locs[i], val);
+            inline for (std.meta.fields(FUniforms), 0..) |field, i| {
+                const val = @field(fus, field.name);
+                set(self.flocs[i], val);
+            }
+            inline for (std.meta.fields(VUniforms), 0..) |field, i| {
+                const val = @field(vus, field.name);
+                set(self.vlocs[i], val);
             }
         }
         fn deinit(self: @This()) void {
@@ -225,9 +240,11 @@ const Vec4 = @Vector(4, f32);
 
 const Quad = struct {
     const Vertex = struct { aPos: Vec3, aTexCoord: Vec2 };
-    const Uniforms = struct { color: Vec4, texture0: ?Texture };
-    sh: Shader(Uniforms, Vertex),
+    const VUniforms = struct { pos: Vec2 };
+    const FUniforms = struct { color: Vec4, texture0: ?Texture };
+    sh: Shader(VUniforms, FUniforms, Vertex),
     mesh: Mesh(Vertex),
+    pos: Vec2,
     fn init() !@This() {
         const vertices = [_]Vertex{
             .{ .aPos = .{ 0.5, 0.5, 0.0 }, .aTexCoord = .{ 1, 1 } },
@@ -238,8 +255,9 @@ const Quad = struct {
         _ = try Texture.init("tile.png");
         const indices = [_]Triangle{ .{ 0, 1, 3 }, .{ 1, 2, 3 } };
         return .{
-            .sh = try Shader(Uniforms, Vertex).init("src/vertex.glsl", "src/fragment.glsl"),
+            .sh = try Shader(VUniforms, FUniforms, Vertex).init("src/vertex.glsl", "src/fragment.glsl"),
             .mesh = Mesh(Vertex).init(&vertices, &indices),
+            .pos = .{ 0, 0 },
         };
     }
     fn deinit(self: @This()) void {
@@ -247,13 +265,15 @@ const Quad = struct {
         self.sh.deinit();
     }
     fn draw(self: @This()) void {
-        self.sh.use(.{ .color = .{ 1, 1, 0, 0 }, .texture0 = null });
+        self.sh.use(
+            .{ .pos = self.pos },
+            .{ .color = .{ 1, 1, 0, 0 }, .texture0 = null },
+        );
         self.mesh.use();
         self.mesh.draw();
     }
 };
 
-var procs: gl.ProcTable = undefined;
 pub fn main() !void {
     // const Vertex = struct { aPos: Vec3 };
     // const Uniforms = struct { color: m.Vec4 };
@@ -267,7 +287,10 @@ pub fn main() !void {
     defer glfw.destroyWindow(window);
     glfw.makeContextCurrent(window);
     defer glfw.makeContextCurrent(null);
+    var x: @Vector(2, f32) = .{ 0, 0 };
+    _ = glfw.setKeyCallback(window, key_callback(&x));
 
+    var procs: gl.ProcTable = undefined;
     if (!procs.init(glfw.getProcAddress)) return error.InitFailed;
 
     gl.makeProcTableCurrent(&procs);
@@ -278,10 +301,18 @@ pub fn main() !void {
 
     // gl.PolygonMode(gl.FRONT_AND_BACK, gl.LINE);
     gl.Enable(gl.COLOR_BUFFER_BIT);
+
+    var lastFrameTime: f64 = 0;
     while (!glfw.windowShouldClose(window)) {
-        if (glfw.getKey(window, glfw.KeyEscape) == glfw.Press) {
-            glfw.setWindowShouldClose(window, true);
-        }
+        const newTime = glfw.getTime();
+        if (lastFrameTime + 1.0 / FPS < newTime)
+            lastFrameTime = newTime
+        else
+            continue;
+
+        t.pos += Vec2{ 0.01, 0.01 } * x;
+        // std.debug.print("{}\n", .{x});
+
         gl.ClearColor(1, 0, 0, 1);
         gl.Clear(gl.COLOR_BUFFER_BIT);
 
@@ -289,4 +320,26 @@ pub fn main() !void {
         glfw.swapBuffers(window);
         glfw.pollEvents();
     }
+}
+
+pub fn key_callback(x: *@Vector(2, f32)) glfw.KeyFun {
+    comptime var clj = struct {
+        var dir: *@Vector(2, f32) = undefined;
+        fn func(window: *glfw.Window, key: i32, scancode: i32, action: i32, mods: i32) callconv(.C) void {
+            _ = scancode;
+            _ = mods;
+            if (key == glfw.KeyEscape and action == glfw.Press)
+                glfw.setWindowShouldClose(window, true);
+            if (key == glfw.KeyW and action == glfw.Press or key == glfw.KeyS and action == glfw.Release)
+                dir.* += .{ 0, 1 };
+            if (key == glfw.KeyS and action == glfw.Press or key == glfw.KeyW and action == glfw.Release)
+                dir.* += .{ 0, -1 };
+            if (key == glfw.KeyD and action == glfw.Press or key == glfw.KeyA and action == glfw.Release)
+                dir.* += .{ 1, 0 };
+            if (key == glfw.KeyA and action == glfw.Press or key == glfw.KeyD and action == glfw.Release)
+                dir.* += .{ -1, 0 };
+        }
+    };
+    clj.dir = x;
+    return clj.func;
 }
