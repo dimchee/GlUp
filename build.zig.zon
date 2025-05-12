@@ -1,7 +1,8 @@
 .{
-    .name = "default",
+    .name = .glup,
     .version = "0.0.0",
 
+    .fingerprint = 0xc435de6de7483961,
     .minimum_zig_version = "0.13.0",
 
     .dependencies = .{

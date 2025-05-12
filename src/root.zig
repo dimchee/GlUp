@@ -1,10 +1,8 @@
 const std = @import("std");
-const gl = @import("gl");
-const glfw = @import("glfw");
-const m = @import("zalgebra");
-const zigimg = @import("zigimg");
-
-const FPS = 60.0;
+pub const gl = @import("gl");
+pub const glfw = @import("glfw");
+pub const m = @import("zalgebra");
+pub const zigimg = @import("zigimg");
 
 const Camera = struct {
     position: m.Vec3,
@@ -88,13 +86,16 @@ fn Shader(VUniforms: type, FUniforms: type, Vertex: type) type {
                 return sol;
             }
         }
-        fn init(vsFile: []const u8, fsFile: []const u8) !@This() {
+        fn initFromFiles(vsFile: []const u8, fsFile: []const u8) !@This() {
+            return init(try fileContent(vsFile), try fileContent(fsFile));
+        }
+        fn init(vertexSource: []const u8, fragmentSource: []const u8) !@This() {
             const vertexSrc = try std.mem.join(std.heap.page_allocator, "\n", &.{
                 "#version 320 es",
                 "out vec2 TexCoord;",
                 comptime attributes(),
                 comptime uniforms(VUniforms),
-                try fileContent(vsFile),
+                vertexSource,
             });
             const fragmentSrc = try std.mem.join(std.heap.page_allocator, "\n", &.{
                 "#version 320 es",
@@ -102,7 +103,7 @@ fn Shader(VUniforms: type, FUniforms: type, Vertex: type) type {
                 "out vec4 FragColor;",
                 "in vec2 TexCoord;",
                 comptime uniforms(FUniforms),
-                try fileContent(fsFile),
+                fragmentSource,
             });
             var success: i32 = undefined;
             const vs = vs: {
@@ -234,37 +235,40 @@ fn Mesh(Vertex: type) type {
     };
 }
 
-const Vec2 = @Vector(2, f32);
-const Vec3 = @Vector(3, f32);
-const Vec4 = @Vector(4, f32);
+pub const Vec2 = @Vector(2, f32);
+pub const Vec3 = @Vector(3, f32);
+pub const Vec4 = @Vector(4, f32);
 
-const Quad = struct {
+pub const Quad = struct {
     const Vertex = struct { aPos: Vec3, aTexCoord: Vec2 };
     const VUniforms = struct { pos: Vec2 };
     const FUniforms = struct { color: Vec4, texture0: ?Texture };
     sh: Shader(VUniforms, FUniforms, Vertex),
     mesh: Mesh(Vertex),
     pos: Vec2,
-    fn init() !@This() {
+    pub fn init() !@This() {
         const vertices = [_]Vertex{
             .{ .aPos = .{ 0.5, 0.5, 0.0 }, .aTexCoord = .{ 1, 1 } },
             .{ .aPos = .{ 0.5, -0.5, 0.0 }, .aTexCoord = .{ 1, 0 } },
             .{ .aPos = .{ -0.5, -0.5, 0.0 }, .aTexCoord = .{ 0, 0 } },
             .{ .aPos = .{ -0.5, 0.5, 0.0 }, .aTexCoord = .{ 0, 1 } },
         };
-        _ = try Texture.init("tile.png");
+        // _ = try Texture.init("tile.png");
         const indices = [_]Triangle{ .{ 0, 1, 3 }, .{ 1, 2, 3 } };
         return .{
-            .sh = try Shader(VUniforms, FUniforms, Vertex).init("src/vertex.glsl", "src/fragment.glsl"),
+            .sh = try Shader(VUniforms, FUniforms, Vertex).init(
+                "void main() { gl_Position = vec4(aPos + vec3(pos, 0.0), 1.0); TexCoord = aTexCoord; }",
+                "void main() { FragColor = color; }",
+            ),
             .mesh = Mesh(Vertex).init(&vertices, &indices),
             .pos = .{ 0, 0 },
         };
     }
-    fn deinit(self: @This()) void {
+    pub fn deinit(self: @This()) void {
         self.mesh.deinit();
         self.sh.deinit();
     }
-    fn draw(self: @This()) void {
+    pub fn draw(self: @This()) void {
         self.sh.use(
             .{ .pos = self.pos },
             .{ .color = .{ 1, 1, 0, 0 }, .texture0 = null },
@@ -274,72 +278,28 @@ const Quad = struct {
     }
 };
 
-pub fn main() !void {
-    // const Vertex = struct { aPos: Vec3 };
-    // const Uniforms = struct { color: m.Vec4 };
-    // const sh = try Shader(Uniforms, Vertex).init("src/vertex.glsl", "src/fragment.glsl");
-    // std.debug.print("{s}\n", .{comptime Shader(Uniforms, Vertex).attributes()});
+pub const Window = struct {
+    window: *glfw.Window,
+    procs: gl.ProcTable,
+    pub fn init(width: u32, height: u32, title: [*:0]const u8, callback: glfw.KeyFun) !@This() {
+        try glfw.init();
 
-    try glfw.init();
-    defer glfw.terminate();
+        const window: *glfw.Window = try glfw.createWindow(@intCast(width), @intCast(height), title, null, null);
+        glfw.makeContextCurrent(window);
+        _ = glfw.setKeyCallback(window, callback);
 
-    const window: *glfw.Window = try glfw.createWindow(800, 640, "Hello World", null, null);
-    defer glfw.destroyWindow(window);
-    glfw.makeContextCurrent(window);
-    defer glfw.makeContextCurrent(null);
-    var x: @Vector(2, f32) = .{ 0, 0 };
-    _ = glfw.setKeyCallback(window, key_callback(&x));
+        var procs: gl.ProcTable = undefined;
+        if (!procs.init(glfw.getProcAddress)) return error.InitFailed;
 
-    var procs: gl.ProcTable = undefined;
-    if (!procs.init(glfw.getProcAddress)) return error.InitFailed;
-
-    gl.makeProcTableCurrent(&procs);
-    defer gl.makeProcTableCurrent(null);
-
-    var t = try Quad.init();
-    defer t.deinit();
-
-    // gl.PolygonMode(gl.FRONT_AND_BACK, gl.LINE);
-    gl.Enable(gl.COLOR_BUFFER_BIT);
-
-    var lastFrameTime: f64 = 0;
-    while (!glfw.windowShouldClose(window)) {
-        const newTime = glfw.getTime();
-        if (lastFrameTime + 1.0 / FPS < newTime)
-            lastFrameTime = newTime
-        else
-            continue;
-
-        t.pos += Vec2{ 0.01, 0.01 } * x;
-        // std.debug.print("{}\n", .{x});
-
-        gl.ClearColor(1, 0, 0, 1);
-        gl.Clear(gl.COLOR_BUFFER_BIT);
-
-        t.draw();
-        glfw.swapBuffers(window);
-        glfw.pollEvents();
+        return .{ .window = window, .procs = procs };
     }
-}
-
-pub fn key_callback(x: *@Vector(2, f32)) glfw.KeyFun {
-    comptime var clj = struct {
-        var dir: *@Vector(2, f32) = undefined;
-        fn func(window: *glfw.Window, key: i32, scancode: i32, action: i32, mods: i32) callconv(.C) void {
-            _ = scancode;
-            _ = mods;
-            if (key == glfw.KeyEscape and action == glfw.Press)
-                glfw.setWindowShouldClose(window, true);
-            if (key == glfw.KeyW and action == glfw.Press or key == glfw.KeyS and action == glfw.Release)
-                dir.* += .{ 0, 1 };
-            if (key == glfw.KeyS and action == glfw.Press or key == glfw.KeyW and action == glfw.Release)
-                dir.* += .{ 0, -1 };
-            if (key == glfw.KeyD and action == glfw.Press or key == glfw.KeyA and action == glfw.Release)
-                dir.* += .{ 1, 0 };
-            if (key == glfw.KeyA and action == glfw.Press or key == glfw.KeyD and action == glfw.Release)
-                dir.* += .{ -1, 0 };
-        }
-    };
-    clj.dir = x;
-    return clj.func;
-}
+    pub fn useProcTable(self: *const @This()) void {
+        gl.makeProcTableCurrent(&self.procs);
+    }
+    pub fn deinit(self: @This()) void {
+        gl.makeProcTableCurrent(null);
+        glfw.makeContextCurrent(null);
+        glfw.destroyWindow(self.window);
+        glfw.terminate();
+    }
+};
