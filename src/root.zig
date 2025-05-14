@@ -2,7 +2,7 @@ const std = @import("std");
 pub const gl = @import("gl");
 pub const glfw = @import("glfw");
 pub const m = @import("zalgebra");
-pub const zigimg = @import("zigimg");
+pub const lodepng = @cImport(@cInclude("lodepng.h"));
 
 const Camera = struct {
     position: m.Vec3,
@@ -33,9 +33,14 @@ const Texture = struct {
         gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR);
         gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
         // load and generate the texture
-        var image = try zigimg.Image.fromFilePath(std.heap.c_allocator, filePath);
-        defer image.deinit();
-        gl.TexImage2D(gl.TEXTURE_2D, 0, gl.RGB, @intCast(image.width), @intCast(image.height), 0, gl.RGB, gl.UNSIGNED_BYTE, image.rawBytes().ptr);
+        // var image = try zigimg.Image.fromFilePath(std.heap.c_allocator, filePath);
+        // defer image.deinit();
+        var image: [*c] u8 = undefined;
+        var width: u32 =  undefined;
+        var height: u32 =  undefined;
+
+        _ = lodepng.lodepng_decode32_file(&image, &width, &height, filePath.ptr);
+        gl.TexImage2D(gl.TEXTURE_2D, 0, gl.RGB, @intCast(width), @intCast(height), 0, gl.RGB, gl.UNSIGNED_BYTE, image);
         gl.GenerateMipmap(gl.TEXTURE_2D);
         return .{ .id = id };
     }
@@ -253,7 +258,7 @@ pub const Quad = struct {
             .{ .aPos = .{ -0.5, -0.5, 0.0 }, .aTexCoord = .{ 0, 0 } },
             .{ .aPos = .{ -0.5, 0.5, 0.0 }, .aTexCoord = .{ 0, 1 } },
         };
-        // _ = try Texture.init("tile.png");
+        _ = try Texture.init("tile.png");
         const indices = [_]Triangle{ .{ 0, 1, 3 }, .{ 1, 2, 3 } };
         return .{
             .sh = try Shader(VUniforms, FUniforms, Vertex).init(
