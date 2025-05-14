@@ -3,6 +3,7 @@ pub const gl = @import("gl");
 pub const glfw = @import("glfw");
 pub const m = @import("zalgebra");
 pub const lodepng = @cImport(@cInclude("lodepng.h"));
+const c = @cImport(@cInclude("stdlib.h"));
 
 const Camera = struct {
     position: m.Vec3,
@@ -17,9 +18,9 @@ const Camera = struct {
     }
 };
 
-const Texture = struct {
+pub const Texture = struct {
     id: u32,
-    fn init(filePath: []const u8) !@This() {
+    pub fn init(filePath: []const u8) !@This() {
         const id = x: {
             var x: [1]u32 = undefined;
             gl.GenTextures(1, &x);
@@ -35,24 +36,30 @@ const Texture = struct {
         // load and generate the texture
         // var image = try zigimg.Image.fromFilePath(std.heap.c_allocator, filePath);
         // defer image.deinit();
-        var image: [*c] u8 = undefined;
-        var width: u32 =  undefined;
-        var height: u32 =  undefined;
+        var image: [*c]u8 = undefined;
+        var width: u32 = undefined;
+        var height: u32 = undefined;
 
         const err = lodepng.lodepng_decode32_file(&image, &width, &height, filePath.ptr);
-        if(err != 0) {
-            std.debug.print("Error: {s}", .{lodepng.lodepng_error_text(err)}); 
+        defer c.free(image);
+        // TODO Leaking memory
+        if (err != 0) {
+            std.debug.print("Error: {s}", .{lodepng.lodepng_error_text(err)});
         }
         gl.TexImage2D(gl.TEXTURE_2D, 0, gl.RGB, @intCast(width), @intCast(height), 0, gl.RGBA, gl.UNSIGNED_BYTE, image);
         gl.GenerateMipmap(gl.TEXTURE_2D);
         return .{ .id = id };
     }
-    fn bind(self: *const @This()) void {
+    pub fn bind(self: *const @This()) void {
         gl.BindTexture(gl.TEXTURE_2D, self.id);
+    }
+    pub fn deinit(self: @This()) void {
+        var id = [_]u32{self.id};
+        gl.DeleteTextures(1, &id);
     }
 };
 
-fn Shader(VUniforms: type, FUniforms: type, Vertex: type) type {
+pub fn Shader(VUniforms: type, FUniforms: type, Vertex: type) type {
     return struct {
         id: u32,
         flocs: [std.meta.fields(FUniforms).len]i32,
@@ -97,10 +104,10 @@ fn Shader(VUniforms: type, FUniforms: type, Vertex: type) type {
                 return sol;
             }
         }
-        fn initFromFiles(vsFile: []const u8, fsFile: []const u8) !@This() {
+        pub fn initFromFiles(vsFile: []const u8, fsFile: []const u8) !@This() {
             return init(try fileContent(vsFile), try fileContent(fsFile));
         }
-        fn init(vertexSource: []const u8, fragmentSource: []const u8) !@This() {
+        pub fn init(vertexSource: []const u8, fragmentSource: []const u8) !@This() {
             const vertexSrc = try std.mem.join(std.heap.page_allocator, "\n", &.{
                 "#version 320 es",
                 "out vec2 TexCoord;",
@@ -153,7 +160,7 @@ fn Shader(VUniforms: type, FUniforms: type, Vertex: type) type {
                 vlocs[i] = gl.GetUniformLocation(sh, uname);
             return .{ .id = sh, .flocs = flocs, .vlocs = vlocs };
         }
-        fn set(loc: i32, value: anytype) void {
+        pub fn set(loc: i32, value: anytype) void {
             if (@TypeOf(value) == @Vector(4, f32))
                 gl.Uniform4f(loc, value[0], value[1], value[2], value[3])
             else if (@TypeOf(value) == @Vector(3, f32))
@@ -166,7 +173,7 @@ fn Shader(VUniforms: type, FUniforms: type, Vertex: type) type {
             else
                 @compileError("Unknown type!");
         }
-        fn use(self: @This(), vus: VUniforms, fus: FUniforms) void {
+        pub fn use(self: @This(), vus: VUniforms, fus: FUniforms) void {
             gl.UseProgram(self.id);
             inline for (std.meta.fields(FUniforms), 0..) |field, i| {
                 const val = @field(fus, field.name);
@@ -177,19 +184,29 @@ fn Shader(VUniforms: type, FUniforms: type, Vertex: type) type {
                 set(self.vlocs[i], val);
             }
         }
-        fn deinit(self: @This()) void {
+        pub fn deinit(self: @This()) void {
             gl.DeleteProgram(self.id);
         }
     };
 }
 const Triangle = struct { u32, u32, u32 };
-fn Mesh(Vertex: type) type {
+pub fn Mesh(Vertex: type) type {
     return struct {
         VAO: u32,
         VBO: u32,
         EBO: u32,
         triCount: i32,
-        fn init(vertices: []const Vertex, indices: []const Triangle) @This() {
+        pub fn quad() @This() {
+            const vertices = [_]Vertex{
+                .{ .aPos = .{ 0.5, 0.5, 0.0 }, .aTexCoord = .{ 1, 1 } },
+                .{ .aPos = .{ 0.5, -0.5, 0.0 }, .aTexCoord = .{ 1, 0 } },
+                .{ .aPos = .{ -0.5, -0.5, 0.0 }, .aTexCoord = .{ 0, 0 } },
+                .{ .aPos = .{ -0.5, 0.5, 0.0 }, .aTexCoord = .{ 0, 1 } },
+            };
+            const indices = [_]Triangle{ .{ 0, 1, 3 }, .{ 1, 2, 3 } };
+            return init(&vertices, &indices);
+        }
+        pub fn init(vertices: []const Vertex, indices: []const Triangle) @This() {
             const VBO: u32 = x: {
                 var x: [1]u32 = undefined;
                 gl.GenBuffers(1, &x);
@@ -229,7 +246,7 @@ fn Mesh(Vertex: type) type {
             }
             return .{ .VAO = VAO, .VBO = VBO, .EBO = EBO, .triCount = @intCast(indices.len) };
         }
-        fn deinit(self: @This()) void {
+        pub fn deinit(self: @This()) void {
             var VAO = [_]u32{self.VAO};
             var VBO = [_]u32{self.VBO};
             var EBO = [_]u32{self.EBO};
@@ -237,10 +254,10 @@ fn Mesh(Vertex: type) type {
             gl.DeleteBuffers(1, &VBO);
             gl.DeleteBuffers(1, &EBO);
         }
-        fn use(self: @This()) void {
+        pub fn use(self: @This()) void {
             gl.BindVertexArray(self.VAO);
         }
-        fn draw(self: @This()) void {
+        pub fn draw(self: @This()) void {
             gl.DrawElements(gl.TRIANGLES, 3 * self.triCount, gl.UNSIGNED_INT, 0);
         }
     };
@@ -250,45 +267,6 @@ pub const Vec2 = @Vector(2, f32);
 pub const Vec3 = @Vector(3, f32);
 pub const Vec4 = @Vector(4, f32);
 
-pub const Quad = struct {
-    const Vertex = struct { aPos: Vec3, aTexCoord: Vec2 };
-    const VUniforms = struct { pos: Vec2 };
-    const FUniforms = struct { color: Vec4, texture0: ?Texture };
-    sh: Shader(VUniforms, FUniforms, Vertex),
-    mesh: Mesh(Vertex),
-    pos: Vec2,
-    pub fn init() !@This() {
-        const vertices = [_]Vertex{
-            .{ .aPos = .{ 0.5, 0.5, 0.0 }, .aTexCoord = .{ 1, 1 } },
-            .{ .aPos = .{ 0.5, -0.5, 0.0 }, .aTexCoord = .{ 1, 0 } },
-            .{ .aPos = .{ -0.5, -0.5, 0.0 }, .aTexCoord = .{ 0, 0 } },
-            .{ .aPos = .{ -0.5, 0.5, 0.0 }, .aTexCoord = .{ 0, 1 } },
-        };
-        const texture = try Texture.init("tile.png");
-        const indices = [_]Triangle{ .{ 0, 1, 3 }, .{ 1, 2, 3 } };
-        texture.bind();
-        return .{
-            .sh = try Shader(VUniforms, FUniforms, Vertex).init(
-                "void main() { gl_Position = vec4(aPos + vec3(pos, 0.0), 1.0); TexCoord = aTexCoord; }",
-                "void main() { FragColor = texture(texture0, TexCoord); }",
-            ),
-            .mesh = Mesh(Vertex).init(&vertices, &indices),
-            .pos = .{ 0, 0 },
-        };
-    }
-    pub fn deinit(self: @This()) void {
-        self.mesh.deinit();
-        self.sh.deinit();
-    }
-    pub fn draw(self: @This()) void {
-        self.sh.use(
-            .{ .pos = self.pos },
-            .{ .color = .{ 1, 1, 0, 0 }, .texture0 = null },
-        );
-        self.mesh.use();
-        self.mesh.draw();
-    }
-};
 
 pub const Window = struct {
     window: *glfw.Window,

@@ -8,8 +8,19 @@ pub fn main() !void {
     defer window.deinit();
     window.useProcTable();
 
-    var t = try glup.Quad.init();
-    defer t.deinit();
+    const Vertex = struct { aPos: glup.Vec3, aTexCoord: glup.Vec2 };
+    const VUniforms = struct { pos: glup.Vec2 };
+    const FUniforms = struct { color: glup.Vec4, texture0: ?glup.Texture };
+    var sh = try glup.Shader(VUniforms, FUniforms, Vertex).init(
+        "void main() { gl_Position = vec4(aPos + vec3(pos, 0.0), 1.0); TexCoord = aTexCoord; }",
+        "void main() { FragColor = texture(texture0, TexCoord); }",
+    );
+    var mesh = glup.Mesh(Vertex).quad();
+    var pos = glup.Vec2{ 0, 0 };
+    var texture = try glup.Texture.init("tile.png");
+    defer mesh.deinit();
+    defer sh.deinit();
+    defer texture.deinit();
 
     // gl.PolygonMode(gl.FRONT_AND_BACK, gl.LINE);
     glup.gl.Enable(glup.gl.COLOR_BUFFER_BIT);
@@ -22,13 +33,20 @@ pub fn main() !void {
         else
             continue;
 
-        t.pos += glup.Vec2{ 0.01, 0.01 } * x;
+        pos += glup.Vec2{ 0.01, 0.01 } * x;
         // std.debug.print("{}\n", .{x});
 
         glup.gl.ClearColor(1, 0, 0, 1);
         glup.gl.Clear(glup.gl.COLOR_BUFFER_BIT);
 
-        t.draw();
+        sh.use(
+            .{ .pos = pos },
+            .{ .color = .{ 1, 1, 0, 0 }, .texture0 = null },
+        );
+        texture.bind();
+        mesh.use();
+        mesh.draw();
+
         glup.glfw.swapBuffers(window.window);
         glup.glfw.pollEvents();
     }
