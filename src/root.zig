@@ -39,10 +39,16 @@ const Texture = struct {
         var width: u32 =  undefined;
         var height: u32 =  undefined;
 
-        _ = lodepng.lodepng_decode32_file(&image, &width, &height, filePath.ptr);
-        gl.TexImage2D(gl.TEXTURE_2D, 0, gl.RGB, @intCast(width), @intCast(height), 0, gl.RGB, gl.UNSIGNED_BYTE, image);
+        const err = lodepng.lodepng_decode32_file(&image, &width, &height, filePath.ptr);
+        if(err != 0) {
+            std.debug.print("Error: {s}", .{lodepng.lodepng_error_text(err)}); 
+        }
+        gl.TexImage2D(gl.TEXTURE_2D, 0, gl.RGB, @intCast(width), @intCast(height), 0, gl.RGBA, gl.UNSIGNED_BYTE, image);
         gl.GenerateMipmap(gl.TEXTURE_2D);
         return .{ .id = id };
+    }
+    fn bind(self: *const @This()) void {
+        gl.BindTexture(gl.TEXTURE_2D, self.id);
     }
 };
 
@@ -258,12 +264,13 @@ pub const Quad = struct {
             .{ .aPos = .{ -0.5, -0.5, 0.0 }, .aTexCoord = .{ 0, 0 } },
             .{ .aPos = .{ -0.5, 0.5, 0.0 }, .aTexCoord = .{ 0, 1 } },
         };
-        _ = try Texture.init("tile.png");
+        const texture = try Texture.init("tile.png");
         const indices = [_]Triangle{ .{ 0, 1, 3 }, .{ 1, 2, 3 } };
+        texture.bind();
         return .{
             .sh = try Shader(VUniforms, FUniforms, Vertex).init(
                 "void main() { gl_Position = vec4(aPos + vec3(pos, 0.0), 1.0); TexCoord = aTexCoord; }",
-                "void main() { FragColor = color; }",
+                "void main() { FragColor = texture(texture0, TexCoord); }",
             ),
             .mesh = Mesh(Vertex).init(&vertices, &indices),
             .pos = .{ 0, 0 },
