@@ -25,8 +25,8 @@ pub fn build(b: *std.Build) void {
     lib.linkLibrary(glfw.artifact("zglfw"));
 
     const example = b.addExecutable(.{
-        .name = "basic_example",
-        .root_source_file = b.path("examples/basic/main.zig"),
+        .name = "example_texture",
+        .root_source_file = b.path("examples/texture.zig"),
         .target = target,
         .optimize = optimize,
     });

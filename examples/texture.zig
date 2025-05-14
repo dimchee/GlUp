@@ -10,7 +10,7 @@ pub fn main() !void {
 
     const Vertex = struct { aPos: glup.Vec3, aTexCoord: glup.Vec2 };
     const VUniforms = struct { pos: glup.Vec2 };
-    const FUniforms = struct { color: glup.Vec4, texture0: ?glup.Texture };
+    const FUniforms = struct { texture0: glup.Texture };
     var sh = try glup.Shader(VUniforms, FUniforms, Vertex).init(
         "void main() { gl_Position = vec4(aPos + vec3(pos, 0.0), 1.0); TexCoord = aTexCoord; }",
         "void main() { FragColor = texture(texture0, TexCoord); }",
@@ -41,7 +41,7 @@ pub fn main() !void {
 
         sh.use(
             .{ .pos = pos },
-            .{ .color = .{ 1, 1, 0, 0 }, .texture0 = null },
+            .{ .texture0 = texture },
         );
         texture.bind();
         mesh.use();

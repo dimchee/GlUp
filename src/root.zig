@@ -3,7 +3,7 @@ pub const gl = @import("gl");
 pub const glfw = @import("glfw");
 pub const m = @import("zalgebra");
 pub const lodepng = @cImport(@cInclude("lodepng.h"));
-const c = @cImport(@cInclude("stdlib.h"));
+pub const c = @cImport(@cInclude("stdlib.h"));
 
 const Camera = struct {
     position: m.Vec3,
@@ -20,13 +20,13 @@ const Camera = struct {
 
 pub const Texture = struct {
     id: u32,
+    slot: u32,
     pub fn init(filePath: []const u8) !@This() {
         const id = x: {
             var x: [1]u32 = undefined;
             gl.GenTextures(1, &x);
             break :x x[0];
         };
-        gl.ActiveTexture(gl.TEXTURE0); // save tex slot so you can bind it
         gl.BindTexture(gl.TEXTURE_2D, id);
         // set the texture wrapping/filtering options (on the currently bound texture object)
         gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.REPEAT);
@@ -48,10 +48,19 @@ pub const Texture = struct {
         }
         gl.TexImage2D(gl.TEXTURE_2D, 0, gl.RGB, @intCast(width), @intCast(height), 0, gl.RGBA, gl.UNSIGNED_BYTE, image);
         gl.GenerateMipmap(gl.TEXTURE_2D);
-        return .{ .id = id };
+
+        return .{ .id = id, .slot = 0 };
+    }
+    pub fn setSlot(self: *@This(), slot: u32) void {
+        std.debug.assert(slot < 32);
+        self.slot = slot;
     }
     pub fn bind(self: *const @This()) void {
+        gl.ActiveTexture(gl.TEXTURE0 + self.slot);
         gl.BindTexture(gl.TEXTURE_2D, self.id);
+    }
+    pub fn unbind() void {
+        gl.BindTexture(gl.TEXTURE_2D, 0);
     }
     pub fn deinit(self: @This()) void {
         var id = [_]u32{self.id};
@@ -83,7 +92,7 @@ pub fn Shader(VUniforms: type, FUniforms: type, Vertex: type) type {
                 "vec2"
             else if (t == f32)
                 "float"
-            else if (t == ?Texture)
+            else if (t == Texture)
                 "sampler2D"
             else
                 @compileError("Unknown type");
@@ -167,8 +176,8 @@ pub fn Shader(VUniforms: type, FUniforms: type, Vertex: type) type {
                 gl.Uniform3f(loc, value[0], value[1], value[2])
             else if (@TypeOf(value) == @Vector(2, f32))
                 gl.Uniform2f(loc, value[0], value[1])
-            else if (@TypeOf(value) == ?Texture)
-                gl.Uniform1i(loc, 0)
+            else if (@TypeOf(value) == Texture)
+                gl.Uniform1i(loc, @intCast(value.slot))
                 // std.debug.print("Texture...", .{})
             else
                 @compileError("Unknown type!");
