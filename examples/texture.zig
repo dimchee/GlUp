@@ -4,7 +4,7 @@ const FPS = 60.0;
 
 pub fn main() !void {
     var x: @Vector(2, f32) = .{ 0, 0 };
-    const window = try glup.Window.init(800, 640, "Hello World", key_callback(&x));
+    const window = try glup.Window.init(800, 640, "Texture Example", key_callback(&x));
     defer window.deinit();
     window.useProcTable();
 

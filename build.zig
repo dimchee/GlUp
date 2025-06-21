@@ -1,13 +1,22 @@
 const std = @import("std");
 
 pub fn build(b: *std.Build) void {
-    const target = b.standardTargetOptions(.{});
-    const optimize = b.standardOptimizeOption(.{});
-    const lib = b.createModule(.{ .root_source_file = b.path("src/root.zig"), .target = target, .optimize = optimize });
-    const gl_bindings = @import("zigglgen").generateBindingsModule(b, .{ .api = .gles, .version = .@"3.2" });
-    const glfw = b.dependency("zglfw", .{ .target = target, .optimize = optimize });
-    const zalgebra = b.dependency("zalgebra", .{ .target = target, .optimize = optimize });
-    const lodepng = b.dependency("lodepng", .{ .target = target, .optimize = optimize });
+    const opts = .{
+        .target = b.standardTargetOptions(.{}),
+        .optimize = b.standardOptimizeOption(.{}),
+    };
+    const lib = b.createModule(.{
+        .root_source_file = b.path("src/root.zig"),
+        .target = opts.target,
+        .optimize = opts.optimize,
+    });
+    const gl_bindings = @import("zigglgen").generateBindingsModule(b, .{
+        .api = .gles,
+        .version = .@"3.2",
+    });
+    const glfw = b.dependency("zglfw", opts);
+    const zm = b.dependency("zm", opts);
+    const lodepng = b.dependency("lodepng", opts);
 
     const cp = b.addSystemCommand(&.{"cp"});
     cp.addFileArg(lodepng.path("lodepng.cpp"));
@@ -21,14 +30,14 @@ pub fn build(b: *std.Build) void {
 
     lib.addImport("gl", gl_bindings);
     lib.addImport("glfw", glfw.module("glfw"));
-    lib.addImport("zalgebra", zalgebra.module("zalgebra"));
+    lib.addImport("zm", zm.module("zm"));
     lib.linkLibrary(glfw.artifact("zglfw"));
 
     const example = b.addExecutable(.{
         .name = "example_texture",
-        .root_source_file = b.path("examples/texture.zig"),
-        .target = target,
-        .optimize = optimize,
+        .root_source_file = b.path("examples/triangle.zig"),
+        .target = opts.target,
+        .optimize = opts.optimize,
     });
     example.root_module.addImport("glup", lib);
     // example.root_module.linkLibrary(glfw.artifact("zglfw"));

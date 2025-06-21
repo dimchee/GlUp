@@ -1,9 +1,6 @@
 # GlUp - Stupidly Simple OpenGL library for Zig
 
 # ToDo
-- use [zm](https://github.com/griush/zm)
-
-
 
 Line
 Point
@@ -22,7 +19,6 @@ Plane
 Ray
 Grid
 
-
 Polygon
 Plane
 Cube
@@ -34,3 +30,7 @@ Torus
 Knot
 Heightmap
 Cubicmap
+
+# Resources
+
+- examples are from fantastic [Learn OpenGL](https://learnopengl.com/)

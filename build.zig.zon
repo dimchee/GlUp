@@ -14,13 +14,13 @@
             .url = "https://github.com/castholm/zigglgen/archive/e46b14cba6ad5032c67e31559955cbdad837078a.tar.gz",
             .hash = "12205250586574bb090261ef5414b257d24d129b5e2f126c6fde501e5b40213eb13e",
         },
-        .zalgebra = .{
-            .url = "git+https://github.com/kooparse/zalgebra.git#e36116987d11c4a28ab8a03ab62d71be8b81404a",
-            .hash = "12200e1b17e15217623e36563e459164fff4debb8210ea9d027d8548aca6d30f0811",
-        },
         .lodepng = .{
             .url = "https://github.com/lvandeve/lodepng/archive/refs/heads/master.zip",
             .hash = "N-V-__8AAKaYDgCFduKxzOU20UUgZ56bB7mpcj27u1TP24Qa",
+        },
+        .zm = .{
+            .url = "git+https://github.com/griush/zm#27ee118800e6ee0804499d053a54100beb579bf3",
+            .hash = "zm-0.3.0-cLX-WY3PAABvjPwxqDx9GZkMixyyrlHueLZTxpGy3kLE",
         },
     },
     .paths = .{

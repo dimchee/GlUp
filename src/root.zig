@@ -1,20 +1,20 @@
 const std = @import("std");
 pub const gl = @import("gl");
 pub const glfw = @import("glfw");
-pub const m = @import("zalgebra");
+pub const zm = @import("zm");
 pub const lodepng = @cImport(@cInclude("lodepng.h"));
 pub const c = @cImport(@cInclude("stdlib.h"));
 
 const Camera = struct {
-    position: m.Vec3,
-    target: m.Vec3,
-    up: m.Vec3,
+    position: zm.Vec3,
+    target: zm.Vec3,
+    up: zm.Vec3,
     fovy: f32,
-    fn view(self: @This()) m.Mat4 {
-        m.lookAt(self.position, self.target, .{ 0, 1, 0 });
+    fn view(self: @This()) zm.Mat4 {
+        zm.Mat4.lookAt(self.position, self.target, .{ 0, 1, 0 });
     }
-    fn perspective(self: @This()) m.Mat4 {
-        m.perspective(self.fovy, 16 / 9, 0.5, 100);
+    fn perspective(self: @This()) zm.Mat4 {
+        zm.Mat4.perspective(self.fovy, 16 / 9, 0.5, 100);
     }
 };
 
@@ -198,7 +198,7 @@ pub fn Shader(VUniforms: type, FUniforms: type, Vertex: type) type {
         }
     };
 }
-const Triangle = struct { u32, u32, u32 };
+pub const Triangle = struct { u32, u32, u32 };
 pub fn Mesh(Vertex: type) type {
     return struct {
         VAO: u32,
@@ -215,7 +215,7 @@ pub fn Mesh(Vertex: type) type {
             const indices = [_]Triangle{ .{ 0, 1, 3 }, .{ 1, 2, 3 } };
             return init(&vertices, &indices);
         }
-        pub fn init(vertices: []const Vertex, indices: []const Triangle) @This() {
+        pub fn init(vertices: []const Vertex, triangles: []const Triangle) @This() {
             const VBO: u32 = x: {
                 var x: [1]u32 = undefined;
                 gl.GenBuffers(1, &x);
@@ -236,7 +236,7 @@ pub fn Mesh(Vertex: type) type {
                 gl.BindBuffer(gl.ARRAY_BUFFER, VBO);
                 gl.BufferData(gl.ARRAY_BUFFER, @sizeOf(Vertex) * @as(i64, @intCast(vertices.len)), vertices.ptr, gl.STATIC_DRAW);
                 gl.BindBuffer(gl.ELEMENT_ARRAY_BUFFER, EBO);
-                gl.BufferData(gl.ELEMENT_ARRAY_BUFFER, @sizeOf(Triangle) * @as(i64, @intCast(indices.len)), indices.ptr, gl.STATIC_DRAW);
+                gl.BufferData(gl.ELEMENT_ARRAY_BUFFER, @sizeOf(Triangle) * @as(i64, @intCast(triangles.len)), triangles.ptr, gl.STATIC_DRAW);
                 var ptr: usize = 0;
                 inline for (std.meta.fields(Vertex), 0..) |field, i|
                     if (field.type == Vec2) {
@@ -253,7 +253,7 @@ pub fn Mesh(Vertex: type) type {
                         ptr += @sizeOf(Vec4);
                     } else @compileError("Vertex can have only fields of `VecN` type");
             }
-            return .{ .VAO = VAO, .VBO = VBO, .EBO = EBO, .triCount = @intCast(indices.len) };
+            return .{ .VAO = VAO, .VBO = VBO, .EBO = EBO, .triCount = @intCast(triangles.len) };
         }
         pub fn deinit(self: @This()) void {
             var VAO = [_]u32{self.VAO};
@@ -276,29 +276,50 @@ pub const Vec2 = @Vector(2, f32);
 pub const Vec3 = @Vector(3, f32);
 pub const Vec4 = @Vector(4, f32);
 
-
-pub const Window = struct {
+pub const App = struct {
     window: *glfw.Window,
-    procs: gl.ProcTable,
-    pub fn init(width: u32, height: u32, title: [*:0]const u8, callback: glfw.KeyFun) !@This() {
+    var procs: gl.ProcTable = undefined;
+    pub fn init(width: u32, height: u32, title: [*:0]const u8) !@This() {
         try glfw.init();
+        glfw.windowHint(glfw.ContextVersionMajor, 3);
+        glfw.windowHint(glfw.ContextVersionMinor, 3);
+        glfw.windowHint(glfw.OpenGLProfile, glfw.OpenGLCoreProfile);
 
-        const window: *glfw.Window = try glfw.createWindow(@intCast(width), @intCast(height), title, null, null);
+        const window = try glfw.createWindow(
+            @intCast(width),
+            @intCast(height),
+            title,
+            null,
+            null,
+        );
         glfw.makeContextCurrent(window);
-        _ = glfw.setKeyCallback(window, callback);
 
-        var procs: gl.ProcTable = undefined;
         if (!procs.init(glfw.getProcAddress)) return error.InitFailed;
+        gl.makeProcTableCurrent(&procs);
 
-        return .{ .window = window, .procs = procs };
-    }
-    pub fn useProcTable(self: *const @This()) void {
-        gl.makeProcTableCurrent(&self.procs);
+        return .{ .window = window };
     }
     pub fn deinit(self: @This()) void {
         gl.makeProcTableCurrent(null);
         glfw.makeContextCurrent(null);
         glfw.destroyWindow(self.window);
         glfw.terminate();
+    }
+    /// Accepts struct with optional fields:
+    ///     .loop: fn(@FieldType("state")) void
+    ///     .state: anytype
+    pub fn run(self: *const @This(), opts: anytype) !void {
+        const Opts = @TypeOf(opts);
+        var state = if (@hasField(Opts, "state")) opts.state;
+        if (@hasField(Opts, "callback"))
+            glfw.setKeyCallback(self.window, opts.callback);
+        while (!glfw.windowShouldClose(self.window)) {
+            if (@hasField(Opts, "loop")) if (@hasField(Opts, "state"))
+                opts.loop(&state)
+            else
+                opts.loop();
+            glfw.swapBuffers(self.window);
+            glfw.pollEvents();
+        }
     }
 };
