@@ -35,7 +35,7 @@ pub fn build(b: *std.Build) void {
 
     const example = b.addExecutable(.{
         .name = "example_texture",
-        .root_source_file = b.path("examples/triangle.zig"),
+        .root_source_file = b.path("examples/textures.zig"),
         .target = opts.target,
         .optimize = opts.optimize,
     });

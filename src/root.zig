@@ -42,6 +42,9 @@ pub const Texture = struct {
 
         const err = lodepng.lodepng_decode32_file(&image, &width, &height, filePath.ptr);
         defer c.free(image);
+        const Color = packed struct { r: u8, g: u8, b: u8, a: u8 };
+        const pixels = @as([*c]Color, @alignCast(@ptrCast(image)));
+        std.mem.reverse(Color, pixels[0 .. width * height]);
         // TODO Leaking memory
         if (err != 0) {
             std.debug.print("Error: {s}", .{lodepng.lodepng_error_text(err)});
