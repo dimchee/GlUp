@@ -9,18 +9,6 @@ pub const Vec2 = zm.Vec2f;
 pub const Vec3 = zm.Vec3f;
 pub const Vec4 = zm.Vec4f;
 
-const Camera = struct {
-    position: Vec3,
-    target: Vec3,
-    up: Vec3,
-    fovy: f32,
-    fn view(self: @This()) zm.Mat4 {
-        zm.Mat4.lookAt(self.position, self.target, .{ 0, 1, 0 });
-    }
-    fn perspective(self: @This()) zm.Mat4 {
-        zm.Mat4.perspective(self.fovy, 16 / 9, 0.5, 100);
-    }
-};
 
 pub const Texture = struct {
     id: u32,
@@ -307,19 +295,22 @@ pub const App = struct {
         glfw.terminate();
     }
     /// Accepts struct with optional fields:
-    ///     .loop: fn(@FieldType("state")) void
+    ///     .loop: ...
+    ///     .init: ...
     ///     .state: anytype
     pub fn run(self: *const @This(), opts: anytype) !void {
         const Opts = @TypeOf(opts);
         var state = if (@hasField(Opts, "state")) opts.state;
         if (@hasField(Opts, "callback"))
             glfw.setKeyCallback(self.window, opts.callback);
+        if (@hasField(Opts, "init"))
+            opts.init(self.window);
         gl.Enable(gl.DEPTH_TEST);
         while (!glfw.windowShouldClose(self.window)) {
             if (@hasField(Opts, "loop")) if (@hasField(Opts, "state"))
-                opts.loop(&state)
+                opts.loop(self.window, &state)
             else
-                opts.loop();
+                opts.loop(self.window);
             glfw.swapBuffers(self.window);
             glfw.pollEvents();
         }
