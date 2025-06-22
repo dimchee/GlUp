@@ -314,6 +314,7 @@ pub const App = struct {
         var state = if (@hasField(Opts, "state")) opts.state;
         if (@hasField(Opts, "callback"))
             glfw.setKeyCallback(self.window, opts.callback);
+        gl.Enable(gl.DEPTH_TEST);
         while (!glfw.windowShouldClose(self.window)) {
             if (@hasField(Opts, "loop")) if (@hasField(Opts, "state"))
                 opts.loop(&state)
