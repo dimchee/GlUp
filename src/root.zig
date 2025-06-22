@@ -5,10 +5,14 @@ pub const zm = @import("zm");
 pub const lodepng = @cImport(@cInclude("lodepng.h"));
 pub const c = @cImport(@cInclude("stdlib.h"));
 
+pub const Vec2 = zm.Vec2f;
+pub const Vec3 = zm.Vec3f;
+pub const Vec4 = zm.Vec4f;
+
 const Camera = struct {
-    position: zm.Vec3,
-    target: zm.Vec3,
-    up: zm.Vec3,
+    position: Vec3,
+    target: Vec3,
+    up: Vec3,
     fovy: f32,
     fn view(self: @This()) zm.Mat4 {
         zm.Mat4.lookAt(self.position, self.target, .{ 0, 1, 0 });
@@ -88,12 +92,14 @@ pub fn Shader(Uniforms: type, Vertex: type) type {
                 "vec3"
             else if (t == @Vector(2, f32))
                 "vec2"
+            else if (t == zm.Mat4f)
+                "mat4"
             else if (t == f32)
                 "float"
             else if (t == Texture)
                 "sampler2D"
             else
-                @compileError("Unknown type");
+                @compileError("Unknown type: " ++ @typeName(t));
         }
         fn attributes() []const u8 {
             comptime {
@@ -175,11 +181,15 @@ pub fn Shader(Uniforms: type, Vertex: type) type {
                 gl.Uniform3f(loc, value[0], value[1], value[2])
             else if (@TypeOf(value) == @Vector(2, f32))
                 gl.Uniform2f(loc, value[0], value[1])
+            else if (@TypeOf(value) == zm.Mat4f) {
+                const val: [16]f32 = value.transpose().data;
+                gl.UniformMatrix4fv(loc, 1, gl.FALSE, &val);
+            }
             else if (@TypeOf(value) == Texture)
                 gl.Uniform1i(loc, @intCast(value.slot))
                 // std.debug.print("Texture...", .{})
             else
-                @compileError("Unknown type!");
+                @compileError("Unknown type: " ++ @typeName(@TypeOf(value)));
         }
         pub fn use(self: @This(), us: Uniforms) void {
             gl.UseProgram(self.id);
@@ -266,10 +276,6 @@ pub fn Mesh(Vertex: type) type {
         }
     };
 }
-
-pub const Vec2 = @Vector(2, f32);
-pub const Vec3 = @Vector(3, f32);
-pub const Vec4 = @Vector(4, f32);
 
 pub const App = struct {
     window: *glfw.Window,
