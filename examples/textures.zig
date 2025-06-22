@@ -2,8 +2,8 @@ const glup = @import("glup");
 
 const FPS = 60.0;
 const Vertex = struct { aPos: glup.Vec3, aTexCoord: glup.Vec2 };
-const FUniforms = struct { texture1: glup.Texture, texture2: glup.Texture };
-const Shader = glup.Shader(struct {}, FUniforms, Vertex);
+const Uniforms = struct { texture1: glup.Texture, texture2: glup.Texture };
+const Shader = glup.Shader(Uniforms, Vertex);
 const Mesh = glup.Mesh(Vertex);
 const State = struct {
     mesh: Mesh,
@@ -15,9 +15,7 @@ const State = struct {
 fn loop(s: *State) void {
     glup.gl.ClearColor(0.2, 0.3, 0.3, 1.0);
     glup.gl.Clear(glup.gl.COLOR_BUFFER_BIT);
-    s.shader.use(.{}, .{ .texture1 = s.texture1, .texture2 = s.texture2 });
-    s.texture1.setSlot(0);
-    s.texture2.setSlot(1);
+    s.shader.use(.{ .texture1 = s.texture1, .texture2 = s.texture2 });
     s.texture1.bind();
     s.texture2.bind();
     s.mesh.use();
@@ -40,7 +38,7 @@ pub fn main() !void {
             "void main() { gl_Position = vec4(aPos, 1.0); TexCoord = aTexCoord; }",
             "void main() { FragColor = mix(texture(texture1, TexCoord), texture(texture2, TexCoord), 0.2); }",
         ),
-        .texture1 = try glup.Texture.init("examples/textures/container.png"),
-        .texture2 = try glup.Texture.init("examples/textures/awesomeface.png"),
+        .texture1 = try glup.Texture.init("examples/textures/container.png", 0),
+        .texture2 = try glup.Texture.init("examples/textures/awesomeface.png", 1),
     } });
 }

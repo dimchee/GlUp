@@ -21,7 +21,8 @@ const Camera = struct {
 pub const Texture = struct {
     id: u32,
     slot: u32,
-    pub fn init(filePath: []const u8) !@This() {
+    pub fn init(filePath: []const u8, slot: u32) !@This() {
+        std.debug.assert(slot < 32);
         const id = x: {
             var x: [1]u32 = undefined;
             gl.GenTextures(1, &x);
@@ -52,11 +53,7 @@ pub const Texture = struct {
         gl.TexImage2D(gl.TEXTURE_2D, 0, gl.RGB, @intCast(width), @intCast(height), 0, gl.RGBA, gl.UNSIGNED_BYTE, image);
         gl.GenerateMipmap(gl.TEXTURE_2D);
 
-        return .{ .id = id, .slot = 0 };
-    }
-    pub fn setSlot(self: *@This(), slot: u32) void {
-        std.debug.assert(slot < 32);
-        self.slot = slot;
+        return .{ .id = id, .slot = slot };
     }
     pub fn bind(self: *const @This()) void {
         gl.ActiveTexture(gl.TEXTURE0 + self.slot);
@@ -71,14 +68,12 @@ pub const Texture = struct {
     }
 };
 
-pub fn Shader(VUniforms: type, FUniforms: type, Vertex: type) type {
+pub fn Shader(Uniforms: type, Vertex: type) type {
     return struct {
         id: u32,
-        flocs: [std.meta.fields(FUniforms).len]i32,
-        vlocs: [std.meta.fields(VUniforms).len]i32,
-        fn infoLog(id: u32, comptime msg: []const u8) void {
+        fn infoLog(id: u32, comptime msg: []const u8, log: anytype) void {
             var buff: [512:0]u8 = .{0} ** 512;
-            gl.GetShaderInfoLog(id, 512, null, &buff);
+            log(id, 512, null, &buff);
             std.log.err(msg, .{buff[0..std.mem.len(@as([*:0]u8, &buff))]});
         }
         fn fileContent(fileName: []const u8) ![]u8 {
@@ -104,15 +99,21 @@ pub fn Shader(VUniforms: type, FUniforms: type, Vertex: type) type {
             comptime {
                 var sol: []const u8 = "";
                 for (std.meta.fields(Vertex), 0..) |field, i|
-                    sol = sol ++ std.fmt.comptimePrint("\nlayout (location = {}) in {s} {s};", .{ i, toType(field.type), field.name });
+                    sol = sol ++ std.fmt.comptimePrint(
+                        "\nlayout (location = {}) in {s} {s};",
+                        .{ i, toType(field.type), field.name },
+                    );
                 return sol;
             }
         }
-        fn uniforms(Uniforms: type) []const u8 {
+        fn uniforms() []const u8 {
             comptime {
                 var sol: []const u8 = "";
-                for (std.meta.fields(Uniforms)) |field|
-                    sol = sol ++ std.fmt.comptimePrint("\nuniform {s} {s};", .{ toType(field.type), field.name });
+                for (std.meta.fields(Uniforms), 0..) |field, i|
+                    sol = sol ++ std.fmt.comptimePrint(
+                        "\nlayout (location = {}) uniform {s} {s};",
+                        .{ i, toType(field.type), field.name },
+                    );
                 return sol;
             }
         }
@@ -122,9 +123,10 @@ pub fn Shader(VUniforms: type, FUniforms: type, Vertex: type) type {
         pub fn init(vertexSource: []const u8, fragmentSource: []const u8) !@This() {
             const vertexSrc = try std.mem.join(std.heap.page_allocator, "\n", &.{
                 "#version 320 es",
+                "precision mediump float;",
                 "out vec2 TexCoord;",
                 comptime attributes(),
-                comptime uniforms(VUniforms),
+                comptime uniforms(),
                 vertexSource,
             });
             const fragmentSrc = try std.mem.join(std.heap.page_allocator, "\n", &.{
@@ -132,7 +134,7 @@ pub fn Shader(VUniforms: type, FUniforms: type, Vertex: type) type {
                 "precision mediump float;",
                 "out vec4 FragColor;",
                 "in vec2 TexCoord;",
-                comptime uniforms(FUniforms),
+                comptime uniforms(),
                 fragmentSource,
             });
             var success: i32 = undefined;
@@ -141,7 +143,7 @@ pub fn Shader(VUniforms: type, FUniforms: type, Vertex: type) type {
                 gl.ShaderSource(vs, 1, &.{vertexSrc.ptr}, null);
                 gl.CompileShader(vs);
                 gl.GetShaderiv(vs, gl.COMPILE_STATUS, &success);
-                if (success == 0) infoLog(vs, "Shader didn't compile: {s}");
+                if (success == gl.FALSE) infoLog(vs, "Shader didn't compile: {s}", gl.GetShaderInfoLog);
                 break :vs vs;
             };
 
@@ -150,7 +152,7 @@ pub fn Shader(VUniforms: type, FUniforms: type, Vertex: type) type {
                 gl.ShaderSource(fs, 1, &.{fragmentSrc.ptr}, null);
                 gl.CompileShader(fs);
                 gl.GetShaderiv(fs, gl.COMPILE_STATUS, &success);
-                if (success == 0) infoLog(fs, "Shader didn't compile: {s}");
+                if (success == gl.FALSE) infoLog(fs, "Shader didn't compile: {s}", gl.GetShaderInfoLog);
                 break :fs fs;
             };
             const sh = sh: {
@@ -161,16 +163,10 @@ pub fn Shader(VUniforms: type, FUniforms: type, Vertex: type) type {
                 gl.DeleteShader(fs);
                 gl.LinkProgram(sh);
                 gl.GetProgramiv(sh, gl.LINK_STATUS, &success);
-                if (success == 0) infoLog(sh, "Shader didn't link {s}");
+                if (success == gl.FALSE) infoLog(sh, "Shader didn't link: {s}", gl.GetProgramInfoLog);
                 break :sh sh;
             };
-            var flocs: [std.meta.fields(FUniforms).len]i32 = undefined;
-            var vlocs: [std.meta.fields(VUniforms).len]i32 = undefined;
-            inline for (std.meta.fieldNames(FUniforms), 0..) |uname, i|
-                flocs[i] = gl.GetUniformLocation(sh, uname);
-            inline for (std.meta.fieldNames(VUniforms), 0..) |uname, i|
-                vlocs[i] = gl.GetUniformLocation(sh, uname);
-            return .{ .id = sh, .flocs = flocs, .vlocs = vlocs };
+            return .{ .id = sh };
         }
         pub fn set(loc: i32, value: anytype) void {
             if (@TypeOf(value) == @Vector(4, f32))
@@ -185,15 +181,11 @@ pub fn Shader(VUniforms: type, FUniforms: type, Vertex: type) type {
             else
                 @compileError("Unknown type!");
         }
-        pub fn use(self: @This(), vus: VUniforms, fus: FUniforms) void {
+        pub fn use(self: @This(), us: Uniforms) void {
             gl.UseProgram(self.id);
-            inline for (std.meta.fields(FUniforms), 0..) |field, i| {
-                const val = @field(fus, field.name);
-                set(self.flocs[i], val);
-            }
-            inline for (std.meta.fields(VUniforms), 0..) |field, i| {
-                const val = @field(vus, field.name);
-                set(self.vlocs[i], val);
+            inline for (std.meta.fields(Uniforms), 0..) |field, i| {
+                const val = @field(us, field.name);
+                set(i, val);
             }
         }
         pub fn deinit(self: @This()) void {
