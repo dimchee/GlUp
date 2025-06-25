@@ -12,7 +12,13 @@ const Uniforms = struct {
 };
 const Shader = glup.Shader(Uniforms, Vertex);
 const Mesh = glup.Mesh(Vertex);
-const State = struct { mesh: Mesh, shader: Shader, texture1: glup.Texture, texture2: glup.Texture, camera: Camera };
+const State = struct {
+    mesh: Mesh,
+    shader: Shader,
+    texture1: glup.Texture,
+    texture2: glup.Texture,
+    camera: Camera,
+};
 const Camera = struct {
     pos: glup.zm.Vec3f,
     dir: glup.zm.Vec3f,
@@ -26,7 +32,7 @@ const Camera = struct {
         return glup.zm.Mat4f.lookAt(self.pos, self.pos + self.dir, .{ 0, 1, 0 });
     }
     fn projection(self: @This()) glup.zm.Mat4f {
-        return glup.zm.Mat4f.perspective(self.fovy, 16 / 9, 0.5, 100);
+        return glup.zm.Mat4f.perspective(self.fovy, 4.0 / 3.0, 0.5, 100);
     }
     fn update(self: *@This(), window: *glup.glfw.Window) void {
         const limit = std.math.degreesToRadians(89);
@@ -69,6 +75,7 @@ const Mouse = struct {
     }
 };
 fn init(window: *glup.glfw.Window) void {
+    glup.gl.Enable(glup.gl.DEPTH_TEST);
     glup.glfw.setInputMode(window, glup.glfw.Cursor, glup.glfw.CursorDisabled);
     _ = glup.glfw.setCursorPosCallback(window, Mouse.pos_callback);
     _ = glup.glfw.setScrollCallback(window, Mouse.scroll_callback);
@@ -84,11 +91,10 @@ fn loop(window: *glup.glfw.Window, s: *State) void {
         .texture2 = s.texture2,
         .projection = s.camera.projection(),
         .view = s.camera.view(),
-        .model = glup.zm.Mat4f.rotation(.{ 0.5, 1, 0 }, @as(f32, @floatCast(glup.glfw.getTime())) * std.math.degreesToRadians(50)),
-        // .transform = glup.zm.Mat4f.translation(0.5, -0.5, 0.0)
-        //     .multiply(
-        //     glup.zm.Mat4f.rotation(.{ 0, 0, 1 }, @floatCast(glup.glfw.getTime())),
-        // ),
+        .model = glup.zm.Mat4f.rotation(
+            .{ 0.5, 1, 0 },
+            @as(f32, @floatCast(glup.glfw.getTime())) * std.math.degreesToRadians(50),
+        ),
     });
     s.texture1.bind();
     s.texture2.bind();
@@ -150,7 +156,7 @@ pub fn main() !void {
         .{ 33, 34, 35 },
     };
 
-    const app = try glup.App.init(800, 640, "Camera Example");
+    const app = try glup.App.init(800, 600, "Camera Example");
     try app.run(.{ .loop = loop, .init = init, .state = State{
         .mesh = Mesh.init(&vertices, &triangles),
         .shader = try Shader.init(

@@ -1,6 +1,5 @@
 const glup = @import("glup");
 
-const FPS = 60.0;
 const Vertex = struct { aPos: glup.Vec3, aTexCoord: glup.Vec2 };
 const Uniforms = struct { texture1: glup.Texture, texture2: glup.Texture };
 const Shader = glup.Shader(Uniforms, Vertex);

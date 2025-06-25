@@ -3,13 +3,13 @@ const std = @import("std");
 
 const Vertex = struct { aPos: glup.Vec3 };
 const Mesh = glup.Mesh(Vertex);
-const Shader = glup.Shader(struct {}, struct {}, Vertex);
+const Shader = glup.Shader(struct {}, Vertex);
 const State = struct { mesh: Mesh, shader: Shader};
 
 fn loop(s: *State) void {
     glup.gl.ClearColor(0.2, 0.3, 0.3, 1.0);
     glup.gl.Clear(glup.gl.COLOR_BUFFER_BIT);
-    s.shader.use(.{}, .{});
+    s.shader.use(.{});
     s.mesh.use();
     s.mesh.draw();
 }

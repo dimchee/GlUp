@@ -1,5 +1,4 @@
 const glup = @import("glup");
-const std = @import("std");
 
 fn loop() void {
     glup.gl.ClearColor(1.0, 0.0, 0.0, 1.0);
@@ -7,8 +6,8 @@ fn loop() void {
 }
 
 pub fn main() !void {
-    try glup.run(.{
-        .title = "Hello Window Example",
+    const app = try glup.App.init(800, 600, "Hello Window Example");
+    try app.run(.{
         .loop = loop,
     });
 }
