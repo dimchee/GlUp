@@ -250,7 +250,7 @@ pub fn Mesh(Vertex: type) type {
 
 pub const App = struct {
     window: *glfw.Window,
-    var procs: gl.ProcTable = undefined;
+    var procs: *gl.ProcTable = undefined;
     pub fn init(width: u32, height: u32, title: [*:0]const u8) !@This() {
         try glfw.init();
         glfw.windowHint(glfw.ContextVersionMajor, 3);
@@ -261,39 +261,30 @@ pub const App = struct {
         const window = try glfw.createWindow(dims[0], dims[1], title, null, null);
         glfw.makeContextCurrent(window);
 
+        procs = try std.heap.c_allocator.create(gl.ProcTable);
         if (!procs.init(glfw.getProcAddress)) return error.InitFailed;
-        gl.makeProcTableCurrent(&procs);
+        gl.makeProcTableCurrent(procs);
 
         return .{ .window = window };
     }
     pub fn deinit(self: @This()) void {
+        std.heap.c_allocator.destroy(self.procs);
         gl.makeProcTableCurrent(null);
         glfw.makeContextCurrent(null);
         glfw.destroyWindow(self.window);
         glfw.terminate();
-    }
-    fn is_struct(x: anytype) bool {
-        return switch (@typeInfo(@TypeOf(x))) {
-            .@"struct" => true,
-            else => false,
-        };
-    }
-    fn is_function(x: anytype) bool {
-        return switch (@typeInfo(@TypeOf(x))) {
-            .@"struct" => true,
-            else => false,
-        };
     }
     /// Accepts struct with optional fields:
     ///     .loop: ...
     ///     .init: ...
     ///     .state: anytype
     pub fn run(self: *const @This(), opts: anytype) !void {
-        @export(&struct {
+        const setProcs = &struct {
             pub fn f(table: ?*const gl.ProcTable) callconv(.c) void {
                 gl.makeProcTableCurrent(table);
             }
-        }.f, .{ .name = "glMakeProcTableCurrent" });
+        }.f;
+        @export(setProcs, .{ .name = "glSetProcs" });
         const Opts = @TypeOf(opts);
         var state = if (@hasField(Opts, "state")) opts.state;
         if (@hasField(Opts, "init")) opts.init(self.window);
@@ -304,7 +295,7 @@ pub const App = struct {
         while (!glfw.windowShouldClose(self.window)) {
             if (loop_reloadable) {
                 try loop.reload();
-                @TypeOf(loop).makeProcTableCurrent(&procs);
+                loop.dynLib.lookup( @TypeOf(setProcs), "glSetProcs",).?(procs);
                 loop.f();
             } else if (@hasField(Opts, "loop")) {
                 const Args = std.meta.ArgsTuple(@TypeOf(opts.loop));
@@ -356,7 +347,6 @@ pub const Reloader = struct {
         @export(func, .{ .name = identifier });
         return struct {
             const is_reloader: void = {};
-            var makeProcTableCurrent = &gl.makeProcTableCurrent;
             f: Func,
             dynLib: std.DynLib,
             watch: Watch,
@@ -372,10 +362,6 @@ pub const Reloader = struct {
                     std.debug.print("Found identifier!\n", .{})
                 else
                     std.debug.print("Didn't find identifier!\n", .{});
-                makeProcTableCurrent = self.dynLib.lookup(
-                    @TypeOf(makeProcTableCurrent),
-                    "glMakeProcTableCurrent",
-                ).?;
                 self.f = self.dynLib.lookup(Func, identifier) orelse self.f;
             }
             pub fn deinit(self: *@This()) void {

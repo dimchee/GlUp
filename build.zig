@@ -54,17 +54,16 @@ pub fn build(b: *std.Build) void {
                 .root_source_file = b.path(path catch @panic("...")),
                 .target = opts.target,
                 .optimize = opts.optimize,
-                .link_libc = true, // https://ziggit.dev/t/debugging-and-allocating-memory-in-code-loaded-from-dynamic-libraries/2639
+                // .link_libc = true, // https://ziggit.dev/t/debugging-and-allocating-memory-in-code-loaded-from-dynamic-libraries/2639
+                .pic = true,
             });
             example_mod.addImport("glup", mod);
-            example_mod.addImport("gl", gl_bindings);
-            example_mod.addImport("glfw", glfw.module("glfw"));
-            example_mod.addImport("zm", zm.module("zm"));
             const so = b.addLibrary(.{
                 .linkage = .dynamic,
                 .name = "reloadable",
                 .root_module = example_mod,
             });
+            // so.dll_export_fns = true;
             const so_art = b.addInstallArtifact(so, .{});
             b.step("hot", "Compile shared library").dependOn(&so_art.step);
         }

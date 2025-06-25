@@ -2,9 +2,9 @@ const std = @import("std");
 const glup = @import("glup");
 
 fn loop() callconv(.c) void {
-    // glup.gl.Clear(glup.gl.COLOR_BUFFER_BIT);
-    // glup.gl.ClearColor(1, 0, 0, 1);
-    std.debug.print("time: {}\n", .{glup.glfw.getTime()});
+    glup.gl.Clear(glup.gl.COLOR_BUFFER_BIT);
+    glup.gl.ClearColor(0, 1, 0, 1);
+    // std.debug.print("time: {}\n", .{glup.glfw.getTime()});
 }
 
 pub fn main() !void {
@@ -17,4 +17,6 @@ pub fn main() !void {
     });
 }
 
-export fn dummy() void { main() catch {}; }
+export fn dummy() void {
+    main() catch {};
+}
