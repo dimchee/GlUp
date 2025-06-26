@@ -7,7 +7,7 @@ pub const Vec2 = zm.Vec2f;
 pub const Vec3 = zm.Vec3f;
 pub const Vec4 = zm.Vec4f;
 
-const Utils = struct {
+pub const Utils = struct {
     fn infoLog(id: u32, comptime msg: []const u8, log: anytype) void {
         var buff: [512:0]u8 = .{0} ** 512;
         log(id, 512, null, &buff);
@@ -18,10 +18,33 @@ const Utils = struct {
         defer file.close();
         return try file.readToEndAlloc(std.heap.c_allocator, 100000);
     }
-    pub fn generate(gen: fn (c_int, [*]u32) void) u32 {
+    fn generate(gen: fn (c_int, [*]u32) void) u32 {
         var x: [1]u32 = undefined;
         gen(1, &x);
         return x[0];
+    }
+    fn depointer(T: type) type {
+        return if (@typeInfo(T) == .pointer) std.meta.Child(T) else T;
+    }
+    fn Merge(X: type, Y: type) type {
+        const xfs = @typeInfo(X).@"struct".fields;
+        const yfs = @typeInfo(Y).@"struct".fields;
+        return @Type(.{ .@"struct" = .{
+            .layout = .auto,
+            .fields = xfs ++ yfs,
+            .is_tuple = false,
+            .decls = &.{},
+        } });
+    }
+
+    pub fn merge(x: anytype, y: anytype) Merge(@TypeOf(x), @TypeOf(y)) {
+        const T = Merge(@TypeOf(x), @TypeOf(y));
+        var sol: T = undefined;
+        inline for (@typeInfo(@TypeOf(x)).@"struct".fields) |field|
+            @field(sol, field.name) = @field(x, field.name);
+        inline for (@typeInfo(@TypeOf(y)).@"struct".fields) |field|
+            @field(sol, field.name) = @field(y, field.name);
+        return sol;
     }
 };
 
@@ -278,36 +301,30 @@ pub const App = struct {
     ///     .loop: ...
     ///     .init: ...
     ///     .state: anytype
-    pub fn run(self: *const @This(), opts: anytype) !void {
-        const setProcs = &struct {
-            pub fn f(table: ?*const gl.ProcTable) callconv(.c) void {
-                gl.makeProcTableCurrent(table);
-            }
-        }.f;
-        @export(setProcs, .{ .name = "glSetProcs" });
-        const Opts = @TypeOf(opts);
-        var state = if (@hasField(Opts, "state")) opts.state;
+    pub fn run(self: *const @This(), opts_: anytype) !void {
+        var opts = opts_;
+        const Opts = Utils.depointer(@TypeOf(opts));
         if (@hasField(Opts, "init")) opts.init(self.window);
-        const loop_reloadable = @hasField(Opts, "loop") and
-            @typeInfo(@TypeOf(opts.loop)) != .@"fn";
-        var loop = if (loop_reloadable) opts.loop else @as(u32, 0);
-
         while (!glfw.windowShouldClose(self.window)) {
-            if (loop_reloadable) {
-                try loop.reload();
-                loop.dynLib.lookup( @TypeOf(setProcs), "glSetProcs",).?(procs);
-                loop.f();
-            } else if (@hasField(Opts, "loop")) {
-                const Args = std.meta.ArgsTuple(@TypeOf(opts.loop));
+            if (@hasField(Opts, "reloader")) {
+                try opts.reloader.reload(&opts);
+                opts.reloader.dynLib.lookup(
+                    @TypeOf(&glSetProcs),
+                    "glSetProcs",
+                ).?(procs);
+            }
+            if (@hasField(Opts, "loop")) {
+                const Func = Utils.depointer(@TypeOf(opts.loop));
+                const Args = std.meta.ArgsTuple(Func);
                 const State = if (@hasField(Opts, "state")) @TypeOf(opts.state) else void;
                 if (Args == @TypeOf(.{}))
                     opts.loop()
                 else if (Args == struct { *glfw.Window })
                     opts.loop(self.window)
                 else if (Args == struct { *State })
-                    opts.loop(&state)
+                    opts.loop(&opts.state)
                 else if (Args == struct { *glfw.Window, *State })
-                    opts.loop(self.window, &state)
+                    opts.loop(self.window, &opts.state)
                 else
                     @compileError("Error loop args: `" ++ @typeName(Args) ++ "`");
             }
@@ -315,7 +332,13 @@ pub const App = struct {
             glfw.pollEvents();
         }
     }
+    fn glSetProcs(table: ?*const gl.ProcTable) callconv(.c) void {
+        gl.makeProcTableCurrent(table);
+    }
 };
+comptime {
+    @export(&App.glSetProcs, .{ .name = "glSetProcs" });
+}
 
 pub const Watch = struct {
     path: []const u8,
@@ -333,40 +356,55 @@ pub const Watch = struct {
     }
 };
 
-pub const Reloader = struct {
-    cnt: comptime_int = 0,
-    pub fn New(rs: *@This(), func: anytype) type {
-        const soPath: []const u8 = "zig-out/lib/libreloadable.so";
-        const Func = @TypeOf(func);
-        switch (@typeInfo(Func)) {
-            .pointer => {},
-            else => @compileError("Expected ptr, found '" ++ @typeName(Func) ++ "'"),
-        }
-        const identifier = std.fmt.comptimePrint("reloader_{}", .{rs.cnt});
-        rs.cnt += 1;
-        @export(func, .{ .name = identifier });
-        return struct {
-            const is_reloader: void = {};
-            f: Func,
-            dynLib: std.DynLib,
-            watch: Watch,
-            pub fn init() !@This() {
-                const dynLib = try std.DynLib.open(soPath);
-                return .{ .f = func, .dynLib = dynLib, .watch = Watch.init(soPath) };
-            }
-            pub fn reload(self: *@This()) !void {
-                if (!(try self.watch.poll())) return;
-                self.dynLib.close();
-                self.dynLib = try std.DynLib.open(soPath);
-                if (self.dynLib.lookup(Func, identifier)) |_|
-                    std.debug.print("Found identifier!\n", .{})
-                else
-                    std.debug.print("Didn't find identifier!\n", .{});
-                self.f = self.dynLib.lookup(Func, identifier) orelse self.f;
-            }
-            pub fn deinit(self: *@This()) void {
-                self.dynLib.close();
-            }
+/// Reloader.init(.{ .loop = loop, .init = init })
+pub fn Reloader(fns: anytype) type {
+    const soPath: []const u8 = "zig-out/lib/libreloadable.so";
+    const Fns = @typeInfo(@TypeOf(fns)).@"struct";
+    var fields: [Fns.fields.len]std.builtin.Type.StructField = undefined;
+    for (Fns.fields, 0..) |field, i| {
+        const func = @field(fns, field.name);
+        @export(&func, .{ .name = field.name });
+        fields[i] = .{
+            .name = field.name,
+            .type = *field.type,
+            .default_value_ptr = @ptrCast(&&func),
+            .is_comptime = false,
+            .alignment = 0,
         };
     }
-};
+    const Reg = @Type(.{
+        .@"struct" = .{
+            .layout = .auto,
+            .fields = fields[0..],
+            .decls = &[_]std.builtin.Type.Declaration{},
+            .is_tuple = false,
+        },
+    });
+    return struct {
+        dynLib: std.DynLib,
+        watch: Watch,
+        reg: Reg,
+        pub fn init() !@This() {
+            const dynLib = try std.DynLib.open(soPath);
+            return .{ .dynLib = dynLib, .watch = Watch.init(soPath), .reg = .{} };
+        }
+        pub fn deinit(self: *@This()) void {
+            self.dynLib.close();
+        }
+        pub fn reload(self: *@This(), reg: anytype) !void {
+            const T = @typeInfo(@TypeOf(reg));
+            if (T != .pointer or @typeInfo(T.pointer.child) != .@"struct")
+                @compileError("Expected pointer to struct, found: " ++
+                    @typeName(@TypeOf(reg)));
+            if (!(try self.watch.poll())) return;
+            self.dynLib.close();
+            self.dynLib = try std.DynLib.open(soPath);
+            inline for (@typeInfo(Reg).@"struct".fields) |field| {
+                const f = self.dynLib.lookup(field.type, field.name);
+                const msg = if (f) |_| "Found" else "Didn't find";
+                std.debug.print("{s} identifier: {s}\n", .{ msg, field.name });
+                if (f) |x| @field(reg, field.name) = x;
+            }
+        }
+    };
+}
