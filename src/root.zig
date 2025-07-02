@@ -299,44 +299,17 @@ pub const App = struct {
         glfw.destroyWindow(self.window);
         glfw.terminate();
     }
-    /// Accepts struct with optional fields:
-    ///     .loop: ...
-    ///     .init: ...
-    ///     .state: anytype
-    pub fn run(self: *const @This(), opts_: anytype) !void {
-        var opts = if (@hasField(@TypeOf(opts_), "reloader"))
-            Utils.merge(opts_, opts_.reloader)
-        else
-            opts_;
-        const Opts = @TypeOf(opts);
-        if (@hasField(Opts, "init")) opts.init(self.window);
-        while (!glfw.windowShouldClose(self.window)) {
-            if (@hasField(Opts, "reloader")) {
-                try opts.reloader.reload();
-                var dynLib = opts.reloader.dynLib;
-                dynLib.lookup(@TypeOf(&glSetProcs), "glSetProcs").?(procs);
-            }
-            if (@hasField(Opts, "loop")) {
-                const Func = Utils.depointer(@TypeOf(opts.loop));
-                const State = if (@hasField(Opts, "state")) @TypeOf(opts.state) else void;
-                const loop = if (@hasField(Opts, "reloader"))
-                    opts.reloader.reg.loop
-                else
-                    opts.loop;
-                switch (std.meta.ArgsTuple(Func)) {
-                    @TypeOf(.{}) => loop(),
-                    struct { *glfw.Window } => loop(self.window),
-                    struct { *State } => loop(&opts.state),
-                    struct { *glfw.Window, *State} => loop(self.window, &opts.state),
-                    else => @compileError("Loop type: `" ++ @typeName(Func) ++ "`"),
-                }
-            }
-            glfw.swapBuffers(self.window);
-            glfw.pollEvents();
-        }
+    pub fn windowOpened(self: *@This()) ?*glfw.Window {
+        glfw.swapBuffers(self.window);
+        glfw.pollEvents();
+        if (glfw.windowShouldClose(self.window)) return null;
+        return self.window;
     }
     fn glSetProcs(table: ?*const gl.ProcTable) callconv(.c) void {
         gl.makeProcTableCurrent(table);
+    }
+    pub fn postReload(dynLib: *std.DynLib) void {
+        dynLib.lookup(@TypeOf(&glSetProcs), "glSetProcs").?(procs);
     }
 };
 comptime {
@@ -359,8 +332,7 @@ pub const Watch = struct {
     }
 };
 
-/// Reloader.init(.{ .loop = loop, .init = init })
-pub fn Reloader(fns: anytype) type {
+pub fn Reloader(fns: anytype, postReload: *const fn (*std.DynLib) void) type {
     const soPath: []const u8 = "zig-out/lib/libreloadable.so";
     var FnsI = @typeInfo(@TypeOf(fns)).@"struct";
     var fields: [FnsI.fields.len]std.builtin.Type.StructField = undefined;
@@ -401,6 +373,7 @@ pub fn Reloader(fns: anytype) type {
                 std.debug.print("{s} identifier: {s}\n", .{ msg, field.name });
                 if (f) |x| @field(self.reg, field.name) = x;
             }
+            postReload(&self.dynLib);
         }
     };
 }

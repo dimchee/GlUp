@@ -74,33 +74,6 @@ const Mouse = struct {
         scroll_offset = .{ @floatCast(xoffset), @floatCast(yoffset) };
     }
 };
-fn init(window: *glup.glfw.Window) void {
-    glup.gl.Enable(glup.gl.DEPTH_TEST);
-    glup.glfw.setInputMode(window, glup.glfw.Cursor, glup.glfw.CursorDisabled);
-    _ = glup.glfw.setCursorPosCallback(window, Mouse.pos_callback);
-    _ = glup.glfw.setScrollCallback(window, Mouse.scroll_callback);
-}
-
-fn loop(window: *glup.glfw.Window, s: *State) void {
-    s.camera.update(window);
-
-    glup.gl.ClearColor(0.2, 0.3, 0.3, 1.0);
-    glup.gl.Clear(glup.gl.COLOR_BUFFER_BIT | glup.gl.DEPTH_BUFFER_BIT);
-    s.shader.use(.{
-        .texture1 = s.texture1,
-        .texture2 = s.texture2,
-        .projection = s.camera.projection(),
-        .view = s.camera.view(),
-        .model = glup.zm.Mat4f.rotation(
-            .{ 0.5, 1, 0 },
-            @as(f32, @floatCast(glup.glfw.getTime())) * std.math.degreesToRadians(50),
-        ),
-    });
-    s.texture1.bind();
-    s.texture2.bind();
-    s.mesh.use();
-    s.mesh.draw();
-}
 
 pub fn main() !void {
     const vertices = [_]Vertex{
@@ -156,15 +129,37 @@ pub fn main() !void {
         .{ 33, 34, 35 },
     };
 
-    const app = try glup.App.init(800, 600, "Camera Example");
-    try app.run(.{ .loop = loop, .init = init, .state = State{
-        .mesh = Mesh.init(&vertices, &triangles),
-        .shader = try Shader.init(
-            "void main() { gl_Position = projection * view * model * vec4(aPos, 1.0); TexCoord = aTexCoord; }",
-            "void main() { FragColor = mix(texture(texture1, TexCoord), texture(texture2, TexCoord), 0.2); }",
-        ),
-        .texture1 = try glup.Texture.init("examples/textures/container.png", 0),
-        .texture2 = try glup.Texture.init("examples/textures/awesomeface.png", 1),
-        .camera = Camera.init(.{ 0, 0, -3 }, .{ 0, 0, 1 }),
-    } });
+    var app = try glup.App.init(800, 600, "Camera Example");
+    glup.gl.Enable(glup.gl.DEPTH_TEST);
+    glup.glfw.setInputMode(app.window, glup.glfw.Cursor, glup.glfw.CursorDisabled);
+    _ = glup.glfw.setCursorPosCallback(app.window, Mouse.pos_callback);
+    _ = glup.glfw.setScrollCallback(app.window, Mouse.scroll_callback);
+    var mesh = Mesh.init(&vertices, &triangles);
+    var shader = try Shader.init(
+        "void main() { gl_Position = projection * view * model * vec4(aPos, 1.0); TexCoord = aTexCoord; }",
+        "void main() { FragColor = mix(texture(texture1, TexCoord), texture(texture2, TexCoord), 0.2); }",
+    );
+    var texture1 = try glup.Texture.init("examples/textures/container.png", 0);
+    var texture2 = try glup.Texture.init("examples/textures/awesomeface.png", 1);
+    var camera = Camera.init(.{ 0, 0, -3 }, .{ 0, 0, 1 });
+    while (app.windowOpened()) |window| {
+        camera.update(window);
+
+        glup.gl.ClearColor(0.2, 0.3, 0.3, 1.0);
+        glup.gl.Clear(glup.gl.COLOR_BUFFER_BIT | glup.gl.DEPTH_BUFFER_BIT);
+        shader.use(.{
+            .texture1 = texture1,
+            .texture2 = texture2,
+            .projection = camera.projection(),
+            .view = camera.view(),
+            .model = glup.zm.Mat4f.rotation(
+                .{ 0.5, 1, 0 },
+                @as(f32, @floatCast(glup.glfw.getTime())) * std.math.degreesToRadians(50),
+            ),
+        });
+        texture1.bind();
+        texture2.bind();
+        mesh.use();
+        mesh.draw();
+    }
 }
