@@ -14,6 +14,7 @@ pub fn main() !void {
     };
     const triangles = [_]glup.Triangle{ .{ 0, 1, 3 }, .{ 1, 2, 3 } };
 
+    var app = try glup.App.init(800, 640, "Textures Example");
     var mesh = Mesh.init(&vertices, &triangles);
     var shader = try Shader.init(
             "void main() { gl_Position = vec4(aPos, 1.0); TexCoord = aTexCoord; }",
@@ -21,8 +22,6 @@ pub fn main() !void {
         );
     var texture1 = try glup.Texture.init("examples/textures/container.png", 0);
     var texture2 = try glup.Texture.init("examples/textures/awesomeface.png", 1);
-
-    var app = try glup.App.init(800, 640, "Textures Example");
     while(app.windowOpened()) |_| {
         glup.gl.ClearColor(0.2, 0.3, 0.3, 1.0);
         glup.gl.Clear(glup.gl.COLOR_BUFFER_BIT);

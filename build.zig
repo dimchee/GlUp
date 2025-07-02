@@ -23,10 +23,18 @@ pub fn build(b: *std.Build) void {
     cp.addFileArg(lodepng.path("lodepng.c"));
     b.getInstallStep().dependOn(&cp.step);
 
-    mod.addCSourceFile(.{ .file = lodepng.path("lodepng.c") });
-
+    const lodepng_mod = b.createModule(.{
+        .target = opts.target,
+        .optimize = opts.optimize,
+    });
+    lodepng_mod.addCSourceFile(.{ .file = lodepng.path("lodepng.c") });
+    lodepng_mod.link_libc = true;
+    const lodepng_lib = b.addLibrary(.{
+        .root_module = lodepng_mod,
+        .name = "lodepng",
+    });
+    mod.linkLibrary(lodepng_lib);
     mod.addIncludePath(lodepng.path(""));
-    mod.link_libcpp = true;
 
     mod.addImport("gl", gl_bindings);
     mod.addImport("glfw", glfw.module("glfw"));
