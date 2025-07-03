@@ -132,8 +132,21 @@ pub fn Shader(Uniforms: type, Vertex: type) type {
             else
                 @compileError("Unknown type: " ++ @typeName(t));
         }
-        pub fn initFromFiles(vsFile: []const u8, fsFile: []const u8) !@This() {
-            return init(try Utils.fileContent(vsFile), try Utils.fileContent(fsFile));
+        pub fn initFromFile(file: []const u8) !@This() {
+            const content = try Utils.fileContent(file);
+            const v = std.mem.indexOf(u8, content, "#vertex").?;
+            const f = std.mem.indexOf(u8, content, "#fragment").?;
+            if (v < f) {
+                return init(
+                    content[v + "#vertex".len .. f],
+                    content[f + "#fragment".len ..],
+                );
+            } else {
+                return init(
+                    content[f + "#fragment".len .. v],
+                    content[v + "#vertex".len ..],
+                );
+            }
         }
         pub fn init(vertexSource: []const u8, fragmentSource: []const u8) !@This() {
             const vertexSrc = try std.mem.join(std.heap.page_allocator, "\n", &.{
