@@ -332,10 +332,10 @@ comptime {
 pub const Watch = struct {
     path: []const u8,
     mtime: i128,
-    fn init(path: []const u8) @This() {
+    pub fn init(path: []const u8) @This() {
         return .{ .path = path, .mtime = 0 };
     }
-    fn poll(self: *@This()) !bool {
+    pub fn changed(self: *@This()) !bool {
         const f = try std.fs.cwd().openFile(self.path, std.fs.File.OpenFlags{});
         defer f.close();
         const s = try f.stat();
@@ -377,7 +377,7 @@ pub fn Reloader(fns: anytype, postReload: *const fn (*std.DynLib) void) type {
             self.dynLib.close();
         }
         pub fn reload(self: *@This()) !void {
-            if (!(try self.watch.poll())) return;
+            if (!(try self.watch.changed())) return;
             self.dynLib.close();
             self.dynLib = try std.DynLib.open(soPath);
             inline for (std.meta.fields(Fns)) |field| {
