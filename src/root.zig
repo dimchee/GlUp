@@ -117,20 +117,15 @@ pub fn Shader(Uniforms: type, Vertex: type) type {
             break :x sol;
         };
         fn toType(t: type) []const u8 {
-            return if (t == @Vector(4, f32))
-                "vec4"
-            else if (t == @Vector(3, f32))
-                "vec3"
-            else if (t == @Vector(2, f32))
-                "vec2"
-            else if (t == zm.Mat4f)
-                "mat4"
-            else if (t == f32)
-                "float"
-            else if (t == Texture)
-                "sampler2D"
-            else
-                @compileError("Unknown type: " ++ @typeName(t));
+            return switch (t) {
+                @Vector(4, f32) => "vec4",
+                @Vector(3, f32) => "vec3",
+                @Vector(2, f32) => "vec2",
+                zm.Mat4f => "mat4",
+                f32 => "float",
+                Texture => "sampler2D",
+                else => @compileError("Unknown type: " ++ @typeName(t)),
+            };
         }
         pub fn initFromFile(file: []const u8) !@This() {
             const content = try Utils.fileContent(file);
@@ -197,20 +192,17 @@ pub fn Shader(Uniforms: type, Vertex: type) type {
             return .{ .id = sh };
         }
         pub fn set(loc: i32, value: anytype) void {
-            if (@TypeOf(value) == @Vector(4, f32))
-                gl.Uniform4f(loc, value[0], value[1], value[2], value[3])
-            else if (@TypeOf(value) == @Vector(3, f32))
-                gl.Uniform3f(loc, value[0], value[1], value[2])
-            else if (@TypeOf(value) == @Vector(2, f32))
-                gl.Uniform2f(loc, value[0], value[1])
-            else if (@TypeOf(value) == zm.Mat4f) {
-                const val: [16]f32 = value.transpose().data;
-                gl.UniformMatrix4fv(loc, 1, gl.FALSE, &val);
-            } else if (@TypeOf(value) == Texture)
-                gl.Uniform1i(loc, @intCast(value.slot))
-                // std.debug.print("Texture...", .{})
-            else
-                @compileError("Unknown type: " ++ @typeName(@TypeOf(value)));
+            switch (@TypeOf(value)) {
+                @Vector(4, f32) => gl.Uniform4f(loc, value[0], value[1], value[2], value[3]),
+                @Vector(3, f32) => gl.Uniform3f(loc, value[0], value[1], value[2]),
+                @Vector(2, f32) => gl.Uniform2f(loc, value[0], value[1]),
+                zm.Mat4f => {
+                    const val: [16]f32 = value.transpose().data;
+                    gl.UniformMatrix4fv(loc, 1, gl.FALSE, &val);
+                },
+                Texture => gl.Uniform1i(loc, @intCast(value.slot)),
+                else => @compileError("Unknown type: " ++ @typeName(@TypeOf(value))),
+            }
         }
         pub fn use(self: @This(), us: Uniforms) void {
             gl.UseProgram(self.id);
@@ -252,20 +244,24 @@ pub fn Mesh(Vertex: type) type {
                 gl.BindBuffer(gl.ELEMENT_ARRAY_BUFFER, EBO);
                 gl.BufferData(gl.ELEMENT_ARRAY_BUFFER, @sizeOf(Triangle) * @as(i64, @intCast(triangles.len)), triangles.ptr, gl.STATIC_DRAW);
                 var ptr: usize = 0;
-                inline for (std.meta.fields(Vertex), 0..) |field, i|
-                    if (field.type == Vec2) {
-                        gl.VertexAttribPointer(i, 2, gl.FLOAT, gl.FALSE, @sizeOf(Vertex), ptr);
-                        gl.EnableVertexAttribArray(i);
-                        ptr += @sizeOf(Vec2);
-                    } else if (field.type == Vec3) {
-                        gl.VertexAttribPointer(i, 3, gl.FLOAT, gl.FALSE, @sizeOf(Vertex), ptr);
-                        gl.EnableVertexAttribArray(i);
-                        ptr += @sizeOf(Vec3);
-                    } else if (field.type == Vec4) {
-                        gl.VertexAttribPointer(i, 4, gl.FLOAT, gl.FALSE, @sizeOf(Vertex), ptr);
-                        gl.EnableVertexAttribArray(i);
-                        ptr += @sizeOf(Vec4);
-                    } else @compileError("Vertex can have only fields of `VecN` type");
+                inline for (std.meta.fields(Vertex), 0..) |field, i| {
+                    switch (field.type) {
+                        @Vector(2, f32) => {
+                            gl.VertexAttribPointer(i, 2, gl.FLOAT, gl.FALSE, @sizeOf(Vertex), ptr);
+                            gl.EnableVertexAttribArray(i);
+                        },
+                        @Vector(3, f32) => {
+                            gl.VertexAttribPointer(i, 3, gl.FLOAT, gl.FALSE, @sizeOf(Vertex), ptr);
+                            gl.EnableVertexAttribArray(i);
+                        },
+                        @Vector(4, f32) => {
+                            gl.VertexAttribPointer(i, 4, gl.FLOAT, gl.FALSE, @sizeOf(Vertex), ptr);
+                            gl.EnableVertexAttribArray(i);
+                        },
+                        else => @compileError("Vertex can have only fields of `VecN` type"),
+                    }
+                    ptr += @sizeOf(field.type);
+                }
             }
             return .{ .VAO = VAO, .VBO = VBO, .EBO = EBO, .triCount = @intCast(triangles.len) };
         }
