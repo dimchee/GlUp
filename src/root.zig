@@ -319,6 +319,10 @@ pub const App = struct {
     }
     pub fn postReload(dynLib: *std.DynLib) void {
         dynLib.lookup(@TypeOf(&glSetProcs), "glSetProcs").?(procs);
+        dynLib.lookup(
+            @TypeOf(&Mouse.setCallbackData),
+            "mouseSetCallbackData",
+        ).?(Mouse.Callback.data);
     }
 };
 comptime {
@@ -386,3 +390,106 @@ pub fn Reloader(fns: anytype, postReload: *const fn (*std.DynLib) void) type {
         }
     };
 }
+
+pub const Keyboard = struct {
+    pub fn Binding(Action: type) type {
+        return struct { key: glfw.Key, action: Action };
+    }
+    pub fn getActions(window: *glfw.Window, Action: type, comptime as: []const Binding(Action)) []Action {
+        var sol: [as.len]Action = undefined;
+        var i: u32 = 0;
+        inline for (as) |a| {
+            if (glfw.getKey(window, a.key) == glfw.Press) {
+                sol[i] = a.action;
+                i += 1;
+            }
+        }
+        return sol[0..i];
+    }
+};
+
+pub const Mouse = struct {
+    pub const Offsets = struct {
+        position: @Vector(2, f32) = .{ 0, 0 },
+        scroll: @Vector(2, f32) = .{ 0, 0 },
+    };
+    var last: ?Offsets = null;
+    var callbackData: Offsets = undefined;
+    const Callback = struct {
+        var data: *Offsets = &callbackData;
+        fn position(_: *glfw.Window, xpos: f64, ypos: f64) callconv(.C) void {
+            data.position = .{ @floatCast(xpos), @floatCast(ypos) };
+        }
+        fn scroll(_: *glfw.Window, xoff: f64, yoff: f64) callconv(.C) void {
+            data.scroll += .{ @floatCast(xoff), @floatCast(yoff) };
+        }
+    };
+    pub fn setFpsMode(window: *glfw.Window) void {
+        glfw.setInputMode(window, glfw.Cursor, glfw.CursorDisabled);
+        _ = glfw.setCursorPosCallback(window, Callback.position);
+        _ = glfw.setScrollCallback(window, Callback.scroll);
+    }
+    pub fn getOffsets() Offsets {
+        const sol = if (last) |l| Offsets{
+            .position = Callback.data.position - l.position,
+            .scroll = Callback.data.scroll - l.scroll,
+        } else Offsets{};
+        last = .{ .position = Callback.data.position, .scroll = Callback.data.scroll };
+        return sol;
+    }
+    fn setCallbackData(data: *Offsets) callconv(.c) void {
+        Callback.data = data;
+    }
+};
+comptime {
+    @export(&Mouse.setCallbackData, .{ .name = "mouseSetCallbackData" });
+}
+
+const EulerAngles = struct {
+    angles: @Vector(3, f32), // yaw[0]  pitch[1] roll[2]
+    fn toDir(self: @This()) @Vector(3, f32) {
+        return .{
+            std.math.cos(self.angles[0]) * std.math.cos(self.angles[1]),
+            std.math.sin(self.angles[1]),
+            std.math.sin(self.angles[0]) * std.math.cos(self.angles[1]),
+        };
+    }
+    fn fromDir(dir: @Vector(3, f32)) @This() {
+        return .{ .angles = .{ std.math.atan2(dir[2], dir[0]), std.math.asin(dir[1]), 0.0 } };
+    }
+};
+pub const Camera = struct {
+    const InputOffsets = struct {
+        position: Vec3,
+        rotation: Vec2,
+        zoom: f32,
+    };
+    pos: Vec3,
+    dir: Vec3,
+    fovy: f32,
+    pub fn init(pos: Vec3, dir: Vec3) @This() {
+        const fovy = std.math.degreesToRadians(60);
+        return .{ .pos = pos, .dir = dir, .fovy = fovy };
+    }
+    pub fn view(self: @This()) zm.Mat4f {
+        return zm.Mat4f.lookAt(self.pos, self.pos + self.dir, zm.vec.up(f32));
+    }
+    pub fn projection(self: @This(), width: usize, height: usize) zm.Mat4f {
+        const aspect = @as(f32, @floatFromInt(width)) / @as(f32, @floatFromInt(height));
+        return zm.Mat4f.perspective(self.fovy, aspect, 0.5, 100);
+    }
+    pub fn update(self: *@This(), offsets: InputOffsets) void {
+        const right = zm.vec.normalize(zm.vec.cross(self.dir, zm.vec.up(f32)));
+        const up = zm.vec.normalize(zm.vec.cross(right, self.dir));
+        self.pos += zm.vec.scale(right, offsets.position[0]);
+        self.pos += zm.vec.scale(up, offsets.position[1]);
+        self.pos += zm.vec.scale(self.dir, offsets.position[2]);
+
+        var ang = EulerAngles.fromDir(self.dir);
+        ang.angles += .{ offsets.rotation[0], -offsets.rotation[1], 0.0 };
+        const limit = std.math.degreesToRadians(89);
+        ang.angles[1] = std.math.clamp(ang.angles[1], -limit, limit);
+        self.dir = ang.toDir();
+        self.fovy = std.math.clamp(self.fovy - offsets.zoom * 0.02, 0.01, 0.8);
+    }
+};
