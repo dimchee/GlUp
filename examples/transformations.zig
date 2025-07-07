@@ -22,11 +22,11 @@ pub fn main() !void {
     var app = try glup.App.init(800, 640, "Transformations Example");
     var mesh = Mesh.init(&vertices, &triangles);
     var shader = try Shader.init(
-        "void main() { gl_Position = transform * vec4(aPos, 1.0); TexCoord = aTexCoord; }",
-        "void main() { FragColor = mix(texture(texture1, TexCoord), texture(texture2, TexCoord), 0.2); }",
+        "out vec2 TexCoord; void main() { gl_Position = transform * vec4(aPos, 1.0); TexCoord = aTexCoord; }",
+        "in vec2 TexCoord; void main() { FragColor = mix(texture(texture1, TexCoord), texture(texture2, TexCoord), 0.2); }",
     );
-    var texture1 = try glup.Texture.init("examples/textures/container.png", 0);
-    var texture2 = try glup.Texture.init("examples/textures/awesomeface.png", 1);
+    const texture1 = try glup.Texture.init("examples/textures/container.png", 0);
+    const texture2 = try glup.Texture.init("examples/textures/awesomeface.png", 1);
     while (app.windowOpened()) |_| {
         glup.gl.ClearColor(0.2, 0.3, 0.3, 1.0);
         glup.gl.Clear(glup.gl.COLOR_BUFFER_BIT);
@@ -38,9 +38,6 @@ pub fn main() !void {
                 glup.zm.Mat4f.rotation(.{ 0, 0, 1 }, @floatCast(glup.glfw.getTime())),
             ),
         });
-        texture1.bind();
-        texture2.bind();
-        mesh.use();
         mesh.draw();
     }
 }

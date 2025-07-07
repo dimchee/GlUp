@@ -82,12 +82,9 @@ pub const Texture = struct {
 
         return .{ .id = id, .slot = slot };
     }
-    pub fn bind(self: *const @This()) void {
+    fn bind(self: *const @This()) void {
         gl.ActiveTexture(gl.TEXTURE0 + self.slot);
         gl.BindTexture(gl.TEXTURE_2D, self.id);
-    }
-    pub fn unbind() void {
-        gl.BindTexture(gl.TEXTURE_2D, 0);
     }
     pub fn deinit(self: @This()) void {
         var id = [_]u32{self.id};
@@ -133,6 +130,7 @@ pub fn Shader(Uniforms: type, Vertex: type) type {
             if (@typeInfo(t) != .@"struct") return null;
             switch (t) {
                 zm.Mat4f => return null,
+                Texture => return null,
                 else => {},
             }
             const ind = std.mem.lastIndexOfScalar(u8, @typeName(t), '.') orelse -1;
@@ -148,11 +146,11 @@ pub fn Shader(Uniforms: type, Vertex: type) type {
         }
         fn toType(t: type) []const u8 {
             return switch (t) {
-                @Vector(4, f32) => "vec4",
-                @Vector(3, f32) => "vec3",
-                @Vector(2, f32) => "vec2",
-                zm.Mat4f => "mat4",
                 f32 => "float",
+                @Vector(2, f32) => "vec2",
+                @Vector(3, f32) => "vec3",
+                @Vector(4, f32) => "vec4",
+                zm.Mat4f => "mat4",
                 Texture => "sampler2D",
                 else => @compileError("Unknown type: " ++ @typeName(t)),
             };
@@ -177,7 +175,6 @@ pub fn Shader(Uniforms: type, Vertex: type) type {
             const vertexSrc = try std.mem.join(std.heap.page_allocator, "\n", &.{
                 "#version 320 es",
                 "precision mediump float;",
-                "out vec2 TexCoord;",
                 attributes,
                 uniforms,
                 vertexSource,
@@ -186,12 +183,20 @@ pub fn Shader(Uniforms: type, Vertex: type) type {
                 "#version 320 es",
                 "precision mediump float;",
                 "out vec4 FragColor;",
-                "in vec2 TexCoord;",
                 uniforms,
                 fragmentSource,
             });
-            // std.debug.print("\n===\n{s}\n===\n", .{vertexSrc});
-            // std.debug.print("\n===\n{s}\n===\n", .{fragmentSrc});
+            {
+                const file = try std.fs.cwd().createFile(
+                    "output.glsl",
+                    .{ .read = true },
+                );
+                defer file.close();
+
+                try file.writeAll(fragmentSrc);
+                try file.writeAll("\n============\n");
+                try file.writeAll(vertexSrc);
+            }
             var success: i32 = undefined;
             const vs = vs: {
                 const vs: u32 = gl.CreateShader(gl.VERTEX_SHADER);
@@ -233,7 +238,10 @@ pub fn Shader(Uniforms: type, Vertex: type) type {
                     const val: [16]f32 = value.transpose().data;
                     gl.UniformMatrix4fv(loc, 1, gl.FALSE, &val);
                 },
-                Texture => gl.Uniform1i(loc, @intCast(value.slot)),
+                Texture => {
+                    value.bind();
+                    gl.Uniform1i(loc, @intCast(value.slot));
+                },
                 else => @compileError("Unknown type: " ++ @typeName(@TypeOf(value))),
             }
         }
@@ -308,10 +316,8 @@ pub fn Mesh(Vertex: type) type {
             gl.DeleteBuffers(1, &VBO);
             gl.DeleteBuffers(1, &EBO);
         }
-        pub fn use(self: @This()) void {
-            gl.BindVertexArray(self.VAO);
-        }
         pub fn draw(self: @This()) void {
+            gl.BindVertexArray(self.VAO);
             gl.DrawElements(gl.TRIANGLES, 3 * self.triCount, gl.UNSIGNED_INT, 0);
         }
     };

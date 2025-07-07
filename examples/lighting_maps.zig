@@ -33,10 +33,18 @@ fn loop(window: *glup.glfw.Window, state: *State) callconv(.c) void {
         .model = glup.zm.Mat4f.identity(),
         .view = state.camera.view(),
         .projection = state.camera.projection(@intCast(width), @intCast(height)),
-        .objectColor = .{ 1.0, 0.5, 0.31 },
-        .lightColor = .{ 1.0, 1.0, 1.0 },
-        .lightPos = lightPos,
         .viewPos = state.camera.pos,
+        .material = .{
+            .diffuse = state.texture_diffuse,
+            .specular = state.texture_specular,
+            .shininess = 32.0,
+        },
+        .light = .{
+            .position = lightPos,
+            .ambient = .{ 0.2, 0.2, 0.2 },
+            .diffuse = .{ 0.5, 0.5, 0.5 },
+            .specular = .{ 1.0, 1.0, 1.0 },
+        },
     });
     state.mesh.draw();
     state.lightShader.use(.{
@@ -44,30 +52,44 @@ fn loop(window: *glup.glfw.Window, state: *State) callconv(.c) void {
             .multiply(glup.zm.Mat4f.scalingVec3(@splat(0.2))),
         .view = state.camera.view(),
         .projection = state.camera.projection(@intCast(width), @intCast(height)),
-        .objectColor = .{ 1.0, 0.0, 0.0 },
-        .lightColor = .{ 1.0, 1.0, 1.0 },
-        .lightPos = lightPos,
-        .viewPos = state.camera.pos,
     });
     state.mesh.draw();
 }
 
 const Mat4 = glup.zm.Mat4f;
+
+const Material = struct {
+    diffuse: glup.Texture,
+    specular: glup.Texture,
+    shininess: f32,
+};
+
+const Light = struct {
+    position: glup.Vec3,
+    ambient: glup.Vec3,
+    diffuse: glup.Vec3,
+    specular: glup.Vec3,
+};
+
 const Uniforms = struct {
     model: Mat4,
     view: Mat4,
     projection: Mat4,
-    objectColor: glup.Vec3,
-    lightColor: glup.Vec3,
-    lightPos: glup.Vec3,
     viewPos: glup.Vec3,
+    light: Light,
+    material: Material,
 };
 const Shader = glup.Shader(Uniforms, cube.Vertex);
+const LightUniforms = struct { model: Mat4, view: Mat4, projection: Mat4 };
+const LightShader = glup.Shader(LightUniforms, cube.Vertex);
+
 const State = struct {
     mesh: glup.Mesh(cube.Vertex),
     shader: Shader,
-    lightShader: Shader,
+    lightShader: LightShader,
     camera: glup.Camera,
+    texture_diffuse: glup.Texture,
+    texture_specular: glup.Texture,
 };
 
 pub fn main() !void {
@@ -75,15 +97,17 @@ pub fn main() !void {
     glup.gl.Enable(glup.gl.DEPTH_TEST);
     glup.Mouse.setFpsMode(app.window);
 
-    var shWatch = glup.Watch.init("examples/basic_lighting.glsl");
+    var shWatch = glup.Watch.init("examples/lighting_maps.glsl");
     var state = State{
         .shader = try Shader.initFromFile(shWatch.path),
-        .lightShader = try Shader.init(
+        .lightShader = try LightShader.init(
             "void main() { gl_Position = projection * view * model * vec4(aPos, 1.0); }",
             "void main() { FragColor = vec4(1.0); }",
         ),
         .mesh = glup.Mesh(cube.Vertex).init(&cube.vertices, &cube.triangles),
         .camera = glup.Camera.init(.{ 1, 2, 5 }, .{ -1, -2, -5 }),
+        .texture_diffuse = try glup.Texture.init("examples/textures/container2.png", 0),
+        .texture_specular = try glup.Texture.init("examples/textures/container2_specular.png", 1),
     };
 
     while (app.windowOpened()) |window| {

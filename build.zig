@@ -56,7 +56,7 @@ pub fn build(b: *std.Build) void {
         b.installArtifact(example);
         const run_cmd = b.addRunArtifact(example);
         b.step(name, "Run example").dependOn(&run_cmd.step);
-        if (std.mem.eql(u8, name, "materials")) {
+        if (std.mem.eql(u8, name, "lighting_maps")) {
             b.step("run", "Run").dependOn(&run_cmd.step);
             const example_mod = b.createModule(.{
                 .root_source_file = b.path(path catch @panic("...")),
@@ -89,5 +89,6 @@ const examples = [_][]const u8{
     "hot-reloading",
     "colors",
     "basic_lighting",
-    "materials"
+    "materials",
+    "lighting_maps",
 };

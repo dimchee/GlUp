@@ -82,11 +82,11 @@ pub fn main() !void {
     _ = glup.glfw.setScrollCallback(app.window, Mouse.scroll_callback);
     var mesh = Mesh.init(&cube.vertices, &cube.triangles);
     var shader = try Shader.init(
-        "void main() { gl_Position = projection * view * model * vec4(aPos, 1.0); TexCoord = aTexCoord; }",
-        "void main() { FragColor = mix(texture(texture1, TexCoord), texture(texture2, TexCoord), 0.2); }",
+        "out vec2 TexCoord; void main() { gl_Position = projection * view * model * vec4(aPos, 1.0); TexCoord = aTexCoord; }",
+        "in  vec2 TexCoord; void main() { FragColor = mix(texture(texture1, TexCoord), texture(texture2, TexCoord), 0.2); }",
     );
-    var texture1 = try glup.Texture.init("examples/textures/container.png", 0);
-    var texture2 = try glup.Texture.init("examples/textures/awesomeface.png", 1);
+    const texture1 = try glup.Texture.init("examples/textures/container.png", 0);
+    const texture2 = try glup.Texture.init("examples/textures/awesomeface.png", 1);
     var camera = Camera.init(.{ 0, 0, -3 }, .{ 0, 0, 1 });
     while (app.windowOpened()) |window| {
         camera.update(window);
@@ -103,9 +103,6 @@ pub fn main() !void {
                 @as(f32, @floatCast(glup.glfw.getTime())) * std.math.degreesToRadians(50),
             ),
         });
-        texture1.bind();
-        texture2.bind();
-        mesh.use();
         mesh.draw();
     }
 }

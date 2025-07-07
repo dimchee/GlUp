@@ -58,21 +58,18 @@ fn loop(window: *glup.glfw.Window, state: *State) callconv(.c) void {
 }
 
 const Mat4 = glup.zm.Mat4f;
-
 const Material = struct {
     ambient: glup.Vec3,
     diffuse: glup.Vec3,
     specular: glup.Vec3,
     shininess: f32,
 };
-
 const Light = struct {
     position: glup.Vec3,
     ambient: glup.Vec3,
     diffuse: glup.Vec3,
     specular: glup.Vec3,
 };
-
 const Uniforms = struct {
     model: Mat4,
     view: Mat4,
@@ -84,12 +81,6 @@ const Uniforms = struct {
 const Shader = glup.Shader(Uniforms, cube.Vertex);
 const LightUniforms = struct { model: Mat4, view: Mat4, projection: Mat4 };
 const LightShader = glup.Shader(LightUniforms, cube.Vertex);
-
-const Rld = glup.Reloader(.{ .loop = &loop }, glup.App.postReload);
-comptime {
-    _ = Rld;
-}
-
 const State = struct {
     mesh: glup.Mesh(cube.Vertex),
     shader: Shader,
@@ -98,13 +89,13 @@ const State = struct {
 };
 
 pub fn main() !void {
-    // var rld = try Rld.init();
     var app = try glup.App.init(800, 640, "App");
     glup.gl.Enable(glup.gl.DEPTH_TEST);
     glup.Mouse.setFpsMode(app.window);
 
+    var shWatch = glup.Watch.init("examples/materials.glsl");
     var state = State{
-        .shader = try Shader.initFromFile("examples/materials_shader.glsl"),
+        .shader = try Shader.initFromFile(shWatch.path),
         .lightShader = try LightShader.init(
             "void main() { gl_Position = projection * view * model * vec4(aPos, 1.0); }",
             "void main() { FragColor = vec4(1.0); }",
@@ -112,16 +103,13 @@ pub fn main() !void {
         .mesh = glup.Mesh(cube.Vertex).init(&cube.vertices, &cube.triangles),
         .camera = glup.Camera.init(.{ 1, 2, 5 }, .{ -1, -2, -5 }),
     };
-    var shWatch = glup.Watch.init("examples/materials_shader.glsl");
 
     while (app.windowOpened()) |window| {
-        // try rld.reload();
         if (try shWatch.changed()) {
             state.shader.deinit();
             state.shader = try Shader
-                .initFromFile("examples/materials_shader.glsl");
+                .initFromFile(shWatch.path);
         }
         loop(window, &state);
-        // rld.reg.loop(window, &state);
     }
 }
