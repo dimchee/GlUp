@@ -7,7 +7,7 @@ fn loop(window: *glup.glfw.Window, state: *State) callconv(.c) void {
     const rotationSensitivity = 0.002;
     const cameraSpeed = 0.05;
     glup.gl.Clear(glup.gl.COLOR_BUFFER_BIT | glup.gl.DEPTH_BUFFER_BIT);
-    glup.gl.ClearColor(0, 0, 1, 1);
+    glup.gl.ClearColor(0.1, 0.1, 0.1, 1.0);
 
     var movement: @Vector(3, f32) = .{ 0, 0, 0 };
     for (glup.Keyboard.getActions(window, @Vector(3, f32), &.{
@@ -28,33 +28,40 @@ fn loop(window: *glup.glfw.Window, state: *State) callconv(.c) void {
     var width: c_int = undefined;
     var height: c_int = undefined;
     glup.glfw.getWindowSize(window, &width, &height);
+    const lightPos: glup.Vec3 = .{ 1.2, 1.0, 2.0 };
     state.shader.use(.{
         .model = glup.zm.Mat4f.identity(),
         .view = state.camera.view(),
         .projection = state.camera.projection(@intCast(width), @intCast(height)),
         .objectColor = .{ 1.0, 0.5, 0.31 },
         .lightColor = .{ 1.0, 1.0, 1.0 },
+        .lightPos = lightPos,
+        .viewPos = state.camera.pos,
     });
     state.mesh.draw();
     state.lightShader.use(.{
-        .model = glup.zm.Mat4f.translation(1.2, 1.0, 2.0)
+        .model = glup.zm.Mat4f.translationVec3(lightPos)
             .multiply(glup.zm.Mat4f.scalingVec3(@splat(0.2))),
         .view = state.camera.view(),
         .projection = state.camera.projection(@intCast(width), @intCast(height)),
         .objectColor = .{ 1.0, 0.0, 0.0 },
         .lightColor = .{ 1.0, 1.0, 1.0 },
+        .lightPos = lightPos,
+        .viewPos = state.camera.pos,
     });
     state.mesh.draw();
 }
 
-const Mat = glup.zm.Mat4f;
+const Mat4 = glup.zm.Mat4f;
 
 const Uniforms = struct {
-    model: Mat,
-    view: Mat,
-    projection: Mat,
+    model: Mat4,
+    view: Mat4,
+    projection: Mat4,
     objectColor: glup.Vec3,
     lightColor: glup.Vec3,
+    lightPos: glup.Vec3,
+    viewPos: glup.Vec3,
 };
 const Shader = glup.Shader(Uniforms, cube.Vertex);
 
@@ -69,7 +76,6 @@ const State = struct {
     lightShader: Shader,
     camera: glup.Camera,
 };
-
 
 pub fn main() !void {
     var rld = try Rld.init();
@@ -86,13 +92,14 @@ pub fn main() !void {
         .mesh = glup.Mesh(cube.Vertex).init(&cube.vertices, &cube.triangles),
         .camera = glup.Camera.init(.{ 1, 2, 5 }, .{ -1, -2, -5 }),
     };
-    var shWatch = glup.Watch.init("examples/colors_shader.glsl");
+    var shWatch = glup.Watch.init("examples/basic_lighting_shader.glsl");
 
     while (app.windowOpened()) |window| {
         try rld.reload();
         if (try shWatch.changed()) {
             state.shader.deinit();
-            state.shader = try Shader.initFromFile("examples/colors_shader.glsl");
+            state.shader = try Shader
+                .initFromFile("examples/basic_lighting_shader.glsl");
         }
         rld.reg.loop(window, &state);
     }

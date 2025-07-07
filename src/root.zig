@@ -95,6 +95,8 @@ pub const Texture = struct {
     }
 };
 
+// ToDo make guard for 'uniform' keyword in shaders:
+//      forbidden - should use generation from zig
 pub fn Shader(Uniforms: type, Vertex: type) type {
     return struct {
         id: u32,
@@ -109,13 +111,41 @@ pub fn Shader(Uniforms: type, Vertex: type) type {
         };
         const uniforms: []const u8 = x: {
             var sol: []const u8 = "";
-            for (std.meta.fields(Uniforms), 0..) |field, i|
-                sol = sol ++ std.fmt.comptimePrint(
-                    "\nlayout (location = {}) uniform {s} {s};",
-                    .{ i, toType(field.type), field.name },
-                );
+            var i = 0;
+            for (std.meta.fields(Uniforms)) |field|
+                if (createType(field.type)) |newType| {
+                    sol = sol ++ std.fmt.comptimePrint(
+                        "\n{s}\nlayout (location = {}) uniform {s} {s};",
+                        .{ newType.decl, i, newType.name, field.name },
+                    );
+                    i += std.meta.fields(field.type).len;
+                } else {
+                    sol = sol ++ std.fmt.comptimePrint(
+                        "\nlayout (location = {}) uniform {s} {s};",
+                        .{ i, toType(field.type), field.name },
+                    );
+                    i += 1;
+                };
             break :x sol;
         };
+        const NewType = struct { decl: []const u8, name: []const u8 };
+        fn createType(t: type) ?NewType {
+            if (@typeInfo(t) != .@"struct") return null;
+            switch (t) {
+                zm.Mat4f => return null,
+                else => {},
+            }
+            const ind = std.mem.lastIndexOfScalar(u8, @typeName(t), '.') orelse -1;
+            const typeName = @typeName(t)[ind + 1 ..];
+            return comptime x: {
+                var sol: []const u8 = "struct " ++ typeName ++ " {\n";
+                for (std.meta.fields(t)) |field| {
+                    sol = sol ++ "    " ++ toType(field.type) ++ " " ++ field.name ++ ";\n";
+                }
+                sol = sol ++ "};";
+                break :x .{ .decl = sol, .name = typeName };
+            };
+        }
         fn toType(t: type) []const u8 {
             return switch (t) {
                 @Vector(4, f32) => "vec4",
@@ -160,6 +190,8 @@ pub fn Shader(Uniforms: type, Vertex: type) type {
                 uniforms,
                 fragmentSource,
             });
+            // std.debug.print("\n===\n{s}\n===\n", .{vertexSrc});
+            // std.debug.print("\n===\n{s}\n===\n", .{fragmentSrc});
             var success: i32 = undefined;
             const vs = vs: {
                 const vs: u32 = gl.CreateShader(gl.VERTEX_SHADER);
@@ -193,9 +225,10 @@ pub fn Shader(Uniforms: type, Vertex: type) type {
         }
         pub fn set(loc: i32, value: anytype) void {
             switch (@TypeOf(value)) {
-                @Vector(4, f32) => gl.Uniform4f(loc, value[0], value[1], value[2], value[3]),
-                @Vector(3, f32) => gl.Uniform3f(loc, value[0], value[1], value[2]),
+                f32 => gl.Uniform1f(loc, value),
                 @Vector(2, f32) => gl.Uniform2f(loc, value[0], value[1]),
+                @Vector(3, f32) => gl.Uniform3f(loc, value[0], value[1], value[2]),
+                @Vector(4, f32) => gl.Uniform4f(loc, value[0], value[1], value[2], value[3]),
                 zm.Mat4f => {
                     const val: [16]f32 = value.transpose().data;
                     gl.UniformMatrix4fv(loc, 1, gl.FALSE, &val);
@@ -206,9 +239,18 @@ pub fn Shader(Uniforms: type, Vertex: type) type {
         }
         pub fn use(self: @This(), us: Uniforms) void {
             gl.UseProgram(self.id);
-            inline for (std.meta.fields(Uniforms), 0..) |field, i| {
+            comptime var i = 0;
+            inline for (std.meta.fields(Uniforms)) |field| {
                 const val = @field(us, field.name);
-                set(i, val);
+                if (comptime createType(field.type)) |_| {
+                    inline for (std.meta.fields(field.type)) |f| {
+                        set(i, @field(val, f.name));
+                        i += 1;
+                    }
+                } else {
+                    set(i, val);
+                    i += 1;
+                }
             }
         }
         pub fn deinit(self: @This()) void {
@@ -246,20 +288,13 @@ pub fn Mesh(Vertex: type) type {
                 var ptr: usize = 0;
                 inline for (std.meta.fields(Vertex), 0..) |field, i| {
                     switch (field.type) {
-                        @Vector(2, f32) => {
-                            gl.VertexAttribPointer(i, 2, gl.FLOAT, gl.FALSE, @sizeOf(Vertex), ptr);
-                            gl.EnableVertexAttribArray(i);
-                        },
-                        @Vector(3, f32) => {
-                            gl.VertexAttribPointer(i, 3, gl.FLOAT, gl.FALSE, @sizeOf(Vertex), ptr);
-                            gl.EnableVertexAttribArray(i);
-                        },
-                        @Vector(4, f32) => {
-                            gl.VertexAttribPointer(i, 4, gl.FLOAT, gl.FALSE, @sizeOf(Vertex), ptr);
-                            gl.EnableVertexAttribArray(i);
-                        },
+                        f32 => gl.VertexAttribPointer(i, 1, gl.FLOAT, gl.FALSE, @sizeOf(Vertex), ptr),
+                        @Vector(2, f32) => gl.VertexAttribPointer(i, 2, gl.FLOAT, gl.FALSE, @sizeOf(Vertex), ptr),
+                        @Vector(3, f32) => gl.VertexAttribPointer(i, 3, gl.FLOAT, gl.FALSE, @sizeOf(Vertex), ptr),
+                        @Vector(4, f32) => gl.VertexAttribPointer(i, 4, gl.FLOAT, gl.FALSE, @sizeOf(Vertex), ptr),
                         else => @compileError("Vertex can have only fields of `VecN` type"),
                     }
+                    gl.EnableVertexAttribArray(i);
                     ptr += @sizeOf(field.type);
                 }
             }
@@ -398,12 +433,10 @@ pub const Keyboard = struct {
     pub fn getActions(window: *glfw.Window, Action: type, comptime as: []const Binding(Action)) []Action {
         var sol: [as.len]Action = undefined;
         var i: u32 = 0;
-        inline for (as) |a| {
-            if (glfw.getKey(window, a.key) == glfw.Press) {
-                sol[i] = a.action;
-                i += 1;
-            }
-        }
+        inline for (as) |a| if (glfw.getKey(window, a.key) == glfw.Press) {
+            sol[i] = a.action;
+            i += 1;
+        };
         return sol[0..i];
     }
 };
@@ -469,7 +502,7 @@ pub const Camera = struct {
     fovy: f32,
     pub fn init(pos: Vec3, dir: Vec3) @This() {
         const fovy = std.math.degreesToRadians(60);
-        return .{ .pos = pos, .dir = dir, .fovy = fovy };
+        return .{ .pos = pos, .dir = zm.vec.normalize(dir), .fovy = fovy };
     }
     pub fn view(self: @This()) zm.Mat4f {
         return zm.Mat4f.lookAt(self.pos, self.pos + self.dir, zm.vec.up(f32));
