@@ -110,41 +110,53 @@ pub fn Shader(Uniforms: type, Vertex: type) type {
             var sol: []const u8 = "";
             var i = 0;
             for (std.meta.fields(Uniforms)) |field|
-                if (createType(field.type)) |newType| {
-                    sol = sol ++ std.fmt.comptimePrint(
-                        "\n{s}\nlayout (location = {}) uniform {s} {s};",
-                        .{ newType.decl, i, newType.name, field.name },
-                    );
-                    i += std.meta.fields(field.type).len;
-                } else {
-                    sol = sol ++ std.fmt.comptimePrint(
-                        "\nlayout (location = {}) uniform {s} {s};",
-                        .{ i, toType(field.type), field.name },
-                    );
-                    i += 1;
-                };
+                sol = sol ++ createTypes(field.type);
+            for (std.meta.fields(Uniforms)) |field| {
+                sol = sol ++ std.fmt.comptimePrint(
+                    "\nlayout (location = {}) uniform {s} {s};",
+                    .{ i, toType(field.type), field.name },
+                );
+                i += uniformLen(field.type);
+            }
             break :x sol;
         };
-        const NewType = struct { decl: []const u8, name: []const u8 };
-        fn createType(t: type) ?NewType {
-            if (@typeInfo(t) != .@"struct") return null;
+        fn trimToLastDot(str: []const u8) []const u8 {
+            const ind = std.mem.lastIndexOfScalar(u8, str, '.') orelse -1;
+            return str[ind + 1 ..];
+        }
+        fn uniformLen(t: type) u32 {
+            const ti = @typeInfo(t);
+            if (ti == .array)
+                return ti.array.len * uniformLen(ti.array.child)
+            else if (ti == .@"struct") {
+                var sol = 0;
+                for (ti.@"struct".fields) |field|
+                    sol += uniformLen(field.type);
+                return sol;
+            } else return 1;
+        }
+        fn createTypes(t: type) []const u8 {
+            const ti = @typeInfo(t);
             switch (t) {
-                zm.Mat4f => return null,
-                Texture => return null,
+                zm.Mat4f => return "",
+                Texture => return "",
                 else => {},
             }
-            const ind = std.mem.lastIndexOfScalar(u8, @typeName(t), '.') orelse -1;
-            const typeName = @typeName(t)[ind + 1 ..];
-            return comptime x: {
-                var sol: []const u8 = "struct " ++ typeName ++ " {\n";
+            if (ti == .array) return createTypes(ti.array.child);
+            if (ti != .@"struct") return "";
+            comptime {
+                var sol: []const u8 = "";
+                for (@typeInfo(t).@"struct".fields) |field|
+                    sol = sol ++ createTypes(field.type);
+                sol = sol ++ "\nstruct " ++ trimToLastDot(@typeName(t)) ++ " {\n";
                 for (std.meta.fields(t)) |field| {
                     sol = sol ++ "    " ++ toType(field.type) ++ " " ++ field.name ++ ";\n";
                 }
-                sol = sol ++ "};";
-                break :x .{ .decl = sol, .name = typeName };
-            };
+                return sol ++ "};";
+            }
         }
         fn toType(t: type) []const u8 {
+            const ti = @typeInfo(t);
             return switch (t) {
                 f32 => "float",
                 @Vector(2, f32) => "vec2",
@@ -152,7 +164,12 @@ pub fn Shader(Uniforms: type, Vertex: type) type {
                 @Vector(4, f32) => "vec4",
                 zm.Mat4f => "mat4",
                 Texture => "sampler2D",
-                else => @compileError("Unknown type: " ++ @typeName(t)),
+                else => if (ti == .array)
+                    std.fmt.comptimePrint("{s}[{}]", .{ toType(ti.array.child), ti.array.len })
+                else if (ti == .@"struct")
+                    trimToLastDot(@typeName(t))
+                else
+                    @compileError("Unknown type: " ++ @typeName(t)),
             };
         }
         pub fn initFromFile(file: []const u8) !@This() {
@@ -229,6 +246,7 @@ pub fn Shader(Uniforms: type, Vertex: type) type {
             return .{ .id = sh };
         }
         pub fn set(loc: i32, value: anytype) void {
+            const ti = @typeInfo(@TypeOf(value));
             switch (@TypeOf(value)) {
                 f32 => gl.Uniform1f(loc, value),
                 @Vector(2, f32) => gl.Uniform2f(loc, value[0], value[1]),
@@ -242,23 +260,26 @@ pub fn Shader(Uniforms: type, Vertex: type) type {
                     value.bind();
                     gl.Uniform1i(loc, @intCast(value.slot));
                 },
-                else => @compileError("Unknown type: " ++ @typeName(@TypeOf(value))),
+                else => if (ti == .array) {
+                    const off = comptime uniformLen(ti.array.child);
+                    inline for (0..ti.array.len) |i|
+                        set(loc + @as(i32, @intCast(i * off)), value[i]);
+                } else if (ti == .@"struct") {
+                    comptime var off = 0;
+                    inline for (ti.@"struct".fields) |field| {
+                        set(loc + off, @field(value, field.name));
+                        off += comptime uniformLen(field.type);
+                    }
+                } else @compileError("Unknown type: " ++ @typeName(@TypeOf(value))),
             }
         }
         pub fn use(self: @This(), us: Uniforms) void {
             gl.UseProgram(self.id);
-            comptime var i = 0;
-            inline for (std.meta.fields(Uniforms)) |field| {
+            comptime var loc = 0;
+            inline for (@typeInfo(Uniforms).@"struct".fields) |field| {
                 const val = @field(us, field.name);
-                if (comptime createType(field.type)) |_| {
-                    inline for (std.meta.fields(field.type)) |f| {
-                        set(i, @field(val, f.name));
-                        i += 1;
-                    }
-                } else {
-                    set(i, val);
-                    i += 1;
-                }
+                set(loc, val);
+                loc += comptime uniformLen(field.type);
             }
         }
         pub fn deinit(self: @This()) void {
@@ -497,6 +518,7 @@ const EulerAngles = struct {
         return .{ .angles = .{ std.math.atan2(dir[2], dir[0]), std.math.asin(dir[1]), 0.0 } };
     }
 };
+// ToDo elongated x axis?
 pub const Camera = struct {
     const InputOffsets = struct {
         position: Vec3,
