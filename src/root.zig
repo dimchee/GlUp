@@ -14,9 +14,7 @@ pub const Utils = struct {
         std.log.err(msg, .{buff[0..std.mem.len(@as([*:0]u8, &buff))]});
     }
     fn fileContent(fileName: []const u8) ![]u8 {
-        var file = try std.fs.cwd().openFile(fileName, .{});
-        defer file.close();
-        return try file.readToEndAlloc(std.heap.c_allocator, 100000);
+        return std.fs.cwd().readFileAlloc(std.heap.c_allocator, fileName, 100000);
     }
     fn generate(gen: fn (c_int, [*]u32) void) u32 {
         var x: [1]u32 = undefined;
@@ -47,6 +45,10 @@ pub const Utils = struct {
         inline for (@typeInfo(@TypeOf(y)).@"struct".fields) |field|
             @field(sol, field.name) = @field(y, field.name);
         return sol;
+    }
+    fn nameToGlsl(str: []const u8) []const u8 {
+        const ind = std.mem.lastIndexOfScalar(u8, str, '.') orelse -1;
+        return str[ind + 1 ..];
     }
 };
 
@@ -120,10 +122,6 @@ pub fn Shader(Uniforms: type, Vertex: type) type {
             }
             break :x sol;
         };
-        fn trimToLastDot(str: []const u8) []const u8 {
-            const ind = std.mem.lastIndexOfScalar(u8, str, '.') orelse -1;
-            return str[ind + 1 ..];
-        }
         fn uniformLen(t: type) u32 {
             const ti = @typeInfo(t);
             if (ti == .array)
@@ -148,7 +146,7 @@ pub fn Shader(Uniforms: type, Vertex: type) type {
                 var sol: []const u8 = "";
                 for (@typeInfo(t).@"struct".fields) |field|
                     sol = sol ++ createTypes(field.type);
-                sol = sol ++ "\nstruct " ++ trimToLastDot(@typeName(t)) ++ " {\n";
+                sol = sol ++ "\nstruct " ++ Utils.nameToGlsl(@typeName(t)) ++ " {\n";
                 for (std.meta.fields(t)) |field| {
                     sol = sol ++ "    " ++ toType(field.type) ++ " " ++ field.name ++ ";\n";
                 }
@@ -167,7 +165,7 @@ pub fn Shader(Uniforms: type, Vertex: type) type {
                 else => if (ti == .array)
                     std.fmt.comptimePrint("{s}[{}]", .{ toType(ti.array.child), ti.array.len })
                 else if (ti == .@"struct")
-                    trimToLastDot(@typeName(t))
+                    Utils.nameToGlsl(@typeName(t))
                 else
                     @compileError("Unknown type: " ++ @typeName(t)),
             };
@@ -361,6 +359,7 @@ pub const App = struct {
         if (!procs.init(glfw.getProcAddress)) return error.InitFailed;
         gl.makeProcTableCurrent(procs);
 
+        Mouse.init(window);
         return .{ .window = window };
     }
     pub fn deinit(self: @This()) void {
@@ -466,6 +465,18 @@ pub const Keyboard = struct {
         };
         return sol[0..i];
     }
+    pub fn movement3D(window: *glfw.Window) @Vector(3, f32) {
+        var sol: @Vector(3, f32) = .{ 0, 0, 0 };
+        for (Keyboard.getActions(window, @Vector(3, f32), &.{
+            .{ .key = glfw.KeyW, .action = .{ 0, 0, 1 } },
+            .{ .key = glfw.KeyS, .action = .{ 0, 0, -1 } },
+            .{ .key = glfw.KeyD, .action = .{ 1, 0, 0 } },
+            .{ .key = glfw.KeyA, .action = .{ -1, 0, 0 } },
+            .{ .key = glfw.KeySpace, .action = .{ 0, 1, 0 } },
+            .{ .key = glfw.KeyLeftShift, .action = .{ 0, -1, 0 } },
+        })) |v| sol += v;
+        return sol;
+    }
 };
 
 pub const Mouse = struct {
@@ -484,10 +495,15 @@ pub const Mouse = struct {
             data.scroll += .{ @floatCast(xoff), @floatCast(yoff) };
         }
     };
-    pub fn setFpsMode(window: *glfw.Window) void {
-        glfw.setInputMode(window, glfw.Cursor, glfw.CursorDisabled);
+    pub fn init(window: *glfw.Window) void {
         _ = glfw.setCursorPosCallback(window, Callback.position);
         _ = glfw.setScrollCallback(window, Callback.scroll);
+    }
+    pub fn setFpsMode(window: *glfw.Window) void {
+        glfw.setInputMode(window, glfw.Cursor, glfw.CursorDisabled);
+    }
+    pub fn setNormalMode(window: *glfw.Window) void {
+        glfw.setInputMode(window, glfw.Cursor, glfw.CursorNormal);
     }
     pub fn getOffsets() Offsets {
         const sol = if (last) |l| Offsets{
@@ -520,7 +536,7 @@ const EulerAngles = struct {
 };
 // ToDo elongated x axis?
 pub const Camera = struct {
-    const InputOffsets = struct {
+    pub const InputOffsets = struct {
         position: Vec3,
         rotation: Vec2,
         zoom: f32,

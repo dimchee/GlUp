@@ -22,6 +22,10 @@
             .url = "git+https://github.com/griush/zm#27ee118800e6ee0804499d053a54100beb579bf3",
             .hash = "zm-0.3.0-cLX-WY3PAABvjPwxqDx9GZkMixyyrlHueLZTxpGy3kLE",
         },
+        .ztracy = .{
+            .url = "https://github.com/zig-gamedev/ztracy/archive/master.tar.gz",
+            .hash = "ztracy-0.14.0-dev-zHJSq1oQFwCAq2LhbqsBUmZAipMzsD8UfKL5Etc_OJMb",
+        },
     },
     .paths = .{
         "build.zig",

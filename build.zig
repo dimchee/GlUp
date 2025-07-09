@@ -36,6 +36,14 @@ pub fn build(b: *std.Build) void {
     mod.linkLibrary(lodepng_lib);
     mod.addIncludePath(lodepng.path(""));
 
+    const ztracy = b.dependency("ztracy", .{
+        .enable_ztracy = true, // false,
+        .enable_fibers = false,
+        .on_demand = false,
+    });
+    mod.addImport("ztracy", ztracy.module("root"));
+    mod.linkLibrary(ztracy.artifact("tracy"));
+
     mod.addImport("gl", gl_bindings);
     mod.addImport("glfw", glfw.module("glfw"));
     mod.addImport("zm", zm.module("zm"));
@@ -53,10 +61,11 @@ pub fn build(b: *std.Build) void {
             // .use_lld = false not working (glfw error)
         });
         example.root_module.addImport("glup", mod);
+        example.root_module.addImport("ztracy", ztracy.module("root"));
         b.installArtifact(example);
         const run_cmd = b.addRunArtifact(example);
         b.step(name, "Run example").dependOn(&run_cmd.step);
-        if (std.mem.eql(u8, name, "light_casters")) {
+        if (std.mem.eql(u8, name, "model")) {
             b.step("run", "Run").dependOn(&run_cmd.step);
             const example_mod = b.createModule(.{
                 .root_source_file = b.path(path catch @panic("...")),
@@ -92,4 +101,5 @@ const examples = [_][]const u8{
     "materials",
     "lighting_maps",
     "light_casters",
+    "model",
 };
