@@ -1,13 +1,44 @@
 const std = @import("std");
 const glup = @import("glup");
-const ztracy = @import("ztracy");
-
-pub const Triangle = struct { u32, u32, u32 };
 
 const Vertex = struct {
     position: @Vector(3, f32),
     texCoord: @Vector(2, f32),
     normal: @Vector(3, f32),
+};
+
+/// All lines have to be longer than buff size!
+const LineIterator = struct {
+    file: std.fs.File,
+    buff: [4096]u8,
+    remains: ?[]const u8,
+    end: usize,
+    it: std.mem.SplitIterator(u8, .scalar),
+    pub fn init(filePath: []const u8) !@This() {
+        return .{
+            .file = try std.fs.cwd().openFile(filePath, .{}),
+            .buff = undefined,
+            .remains = "",
+            .end = 0,
+            .it = std.mem.splitScalar(u8, "", '\n'),
+        };
+    }
+    pub fn next(self: *@This()) !?[]const u8 {
+        if (self.it.next()) |line| return line;
+        if (self.remains) |rs| {
+            for (self.buff[0..rs.len], rs) |*new, x| new.* = x;
+            self.end = rs.len + try self.file.readAll(self.buff[rs.len..]);
+            self.remains = null;
+            if (std.mem.lastIndexOfScalar(u8, self.buff[0..self.end], '\n')) |lastNL| {
+                self.it = std.mem.splitScalar(u8, self.buff[0..lastNL], '\n');
+                self.remains = self.buff[(lastNL + 1)..self.end];
+            }
+        }
+        return self.it.next();
+    }
+    pub fn deinit(self: @This()) void {
+        self.file.close();
+    }
 };
 
 const ModelParser = struct {
@@ -21,24 +52,22 @@ const ModelParser = struct {
     normals: std.ArrayList(@Vector(3, f32)),
     vertIndex: std.AutoHashMap(UnfinishedVertex, u32),
     vertices: std.ArrayList(Vertex),
-    triangles: std.ArrayList(Triangle),
+    triangles: std.ArrayList(glup.Triangle),
     fn init(arena: *std.heap.ArenaAllocator, allocator: std.mem.Allocator) @This() {
         const alloc = arena.allocator();
         return .{
-            .positions = std.ArrayList(@Vector(3, f32)).init(alloc),
-            .texCoords = std.ArrayList(@Vector(2, f32)).init(alloc),
-            .normals = std.ArrayList(@Vector(3, f32)).init(alloc),
-            .vertIndex = std.AutoHashMap(UnfinishedVertex, u32).init(alloc),
-            .vertices = std.ArrayList(Vertex).init(allocator),
-            .triangles = std.ArrayList(Triangle).init(allocator),
+            .positions = .init(alloc),
+            .texCoords = .init(alloc),
+            .normals = .init(alloc),
+            .vertIndex = .init(alloc),
+            .vertices = .init(allocator),
+            .triangles = .init(allocator),
         };
     }
     fn getAt(T: type, slice: []T, index: i64) T {
         return slice[if (index < 0) slice.len + 1 - @abs(index) else @intCast(index)];
     }
     fn parseVertex(self: *@This(), str: []const u8) !u32 {
-        const tracy_zone = ztracy.ZoneNC(@src(), "Parse Vertex", 0x00_ff_00_00);
-        defer tracy_zone.End();
         var it = std.mem.splitScalar(u8, str, '/');
         const v = UnfinishedVertex{
             .position = try std.fmt.parseInt(i64, it.next().?, 10) - 1,
@@ -59,59 +88,69 @@ const ModelParser = struct {
         }
         return ind;
     }
+    fn parseTriangle(self: *@This(), it: *Model.WordIt) !glup.Triangle {
+        return .{
+            try self.parseVertex(it.next().?),
+            try self.parseVertex(it.next().?),
+            try self.parseVertex(it.next().?),
+        };
+    }
 };
 
 const Model = struct {
+    const WordIt = std.mem.TokenIterator(u8, .scalar);
+    const Mode = enum { Comment, O, V, Vt, Vn, F, Mtllib, Usemtl, S };
+    const map = std.static_string_map.StaticStringMap(Mode).initComptime(.{
+        .{ "#", .Comment },
+        .{ "o", .O },
+        .{ "v", .V },
+        .{ "vt", .Vt },
+        .{ "vn", .Vn },
+        .{ "f", .F },
+        .{ "s", .S },
+        .{ "mtllib", .Mtllib },
+        .{ "usemtl", .Usemtl },
+    });
     vertices: std.ArrayList(Vertex),
-    triangles: std.ArrayList(Triangle),
-    fn processLine(sol: *ModelParser, line: []const u8) !void {
-        const tracy_zone = ztracy.ZoneNC(@src(), "Process line", 0x00_ff_00_00);
-        defer tracy_zone.End();
-        var it = std.mem.tokenizeScalar(u8, line, ' ');
-        if (it.next()) |head| {
-            if (std.mem.eql(u8, head, "o")) {
-                std.debug.print("Parsing Part: {s}\n", .{it.next().?});
-            } else if (std.mem.eql(u8, head, "v")) {
-                try sol.positions.append(.{
-                    try std.fmt.parseFloat(f32, it.next().?),
-                    try std.fmt.parseFloat(f32, it.next().?),
-                    try std.fmt.parseFloat(f32, it.next().?),
-                });
-            } else if (std.mem.eql(u8, head, "vt")) {
-                try sol.texCoords.append(.{
-                    try std.fmt.parseFloat(f32, it.next().?),
-                    try std.fmt.parseFloat(f32, it.next().?),
-                });
-            } else if (std.mem.eql(u8, head, "vn")) {
-                try sol.normals.append(.{
-                    try std.fmt.parseFloat(f32, it.next().?),
-                    try std.fmt.parseFloat(f32, it.next().?),
-                    try std.fmt.parseFloat(f32, it.next().?),
-                });
-            } else if (std.mem.eql(u8, head, "f")) {
-                try sol.triangles.append(.{
-                    try sol.parseVertex(it.next().?),
-                    try sol.parseVertex(it.next().?),
-                    try sol.parseVertex(it.next().?),
-                });
-            }
-        }
+    triangles: std.ArrayList(glup.Triangle),
+    fn getVecF32(n: comptime_int, it: *WordIt) !@Vector(n, f32) {
+        var sol: @Vector(n, f32) = undefined;
+        for (0..n) |i| sol[i] = try std.fmt.parseFloat(f32, it.next().?);
+        return sol;
+    }
+    fn processLine(sol: *ModelParser, head: []const u8, it: *WordIt) !void {
+        if (map.get(head)) |x| switch (x) {
+            .Comment => {},
+            .O => std.debug.print("Parsing Part: {s}\n", .{it.next().?}),
+            .V => try sol.positions.append(try getVecF32(3, it)),
+            .Vt => try sol.texCoords.append(try getVecF32(2, it)),
+            .Vn => try sol.normals.append(try getVecF32(3, it)),
+            .F => try sol.triangles.append(try sol.parseTriangle(it)),
+            .S => {
+                // Smoothing group
+            },
+            .Mtllib => {
+                const filename = it.next().?;
+                _ = filename;
+            },
+            .Usemtl => {},
+        } else std.debug.print("Ignored head: {s}\n", .{head});
     }
     fn init(filePath: []const u8, allocator: std.mem.Allocator) !@This() {
-        const tracy_zone = ztracy.ZoneNC(@src(), "Start Parsing", 0x00_ff_00_00);
-        defer tracy_zone.End();
-        const file = try std.fs.cwd().openFile(filePath, .{});
-        defer file.close();
-        var buffered = std.io.bufferedReader(file.reader());
-        var reader = buffered.reader();
         var arena = std.heap.ArenaAllocator.init(allocator);
         defer arena.deinit();
         var sol: ModelParser = ModelParser.init(&arena, allocator);
-        var buff: [1024]u8 = undefined;
+
         var ind: u32 = 0;
-        while (try reader.readUntilDelimiterOrEof(&buff, '\n')) |line| {
-            var buf2: [128]u8 = undefined;
-            processLine(&sol, line) catch @panic(try std.fmt.bufPrint(&buf2, "Error line: {}", .{ind}));
+        var it = try LineIterator.init(filePath);
+        defer it.deinit();
+        while (try it.next()) |line| {
+            var buff: [128]u8 = undefined;
+            var wordIt = std.mem.tokenizeScalar(u8, line, ' ');
+            if (wordIt.next()) |head| {
+                processLine(&sol, head, &wordIt) catch
+                    @panic(try std.fmt.bufPrint(&buff, "Error line: {}", .{ind}));
+            }
             ind += 1;
         }
         return .{ .vertices = sol.vertices, .triangles = sol.triangles };
@@ -121,30 +160,6 @@ const Model = struct {
         self.triangles.deinit();
     }
 };
-
-// fn reading4(allocator: std.mem.Allocator) void {
-//     _ = allocator;
-//     const file = std.fs.cwd().openFile(filePath, .{}) catch
-//         @panic("Couldn't open file");
-//     defer file.close();
-//     var cnt = Counter{};
-//
-//     var buff: [4096]u8 = undefined;
-//     var start: usize = 0;
-//     var end: usize = 0;
-//     while (true) {
-//         end = start + (file.readAll(buff[start..]) catch
-//             @panic("Couldn't read"));
-//         if (start == end) break;
-//         if (std.mem.lastIndexOfScalar(u8, buff[0..end], '\n')) |lastNL| {
-//             var it = std.mem.splitScalar(u8, buff[0..lastNL], '\n');
-//             while (it.next()) |line| cnt.processLine(line);
-//             start = end - lastNL;
-//             for (buff[lastNL..end], buff[0..start]) |c, *x| x.* = c;
-//         } else @panic("Line too long!");
-//     }
-//     cnt.processLine(buff[0..end]);
-// }
 
 const vec = glup.zm.vec;
 const rotationSensitivity = 0.002;
