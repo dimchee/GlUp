@@ -15,13 +15,9 @@ const LineIterator = struct {
     end: usize,
     it: std.mem.SplitIterator(u8, .scalar),
     pub fn init(filePath: []const u8) !@This() {
-        return .{
-            .file = try std.fs.cwd().openFile(filePath, .{}),
-            .buff = undefined,
-            .remains = "",
-            .end = 0,
-            .it = std.mem.splitScalar(u8, "", '\n'),
-        };
+        const file = try std.fs.cwd().openFile(filePath, .{});
+        const it = std.mem.splitScalar(u8, "", '\n');
+        return .{ .file = file, .buff = undefined, .remains = "", .end = 0, .it = it };
     }
     pub fn next(self: *@This()) !?[]const u8 {
         if (self.it.next()) |line| return line;
@@ -53,6 +49,7 @@ const ModelParser = struct {
     vertIndex: std.AutoHashMap(UnfinishedVertex, u32),
     vertices: std.ArrayList(Vertex),
     triangles: std.ArrayList(glup.Triangle),
+    materials: std.StringHashMap(Material),
     fn init(arena: *std.heap.ArenaAllocator, allocator: std.mem.Allocator) @This() {
         const alloc = arena.allocator();
         return .{
@@ -62,6 +59,7 @@ const ModelParser = struct {
             .vertIndex = .init(alloc),
             .vertices = .init(allocator),
             .triangles = .init(allocator),
+            .materials = .init(allocator),
         };
     }
     fn getAt(T: type, slice: []T, index: i64) T {
@@ -99,41 +97,28 @@ const ModelParser = struct {
 
 const Model = struct {
     const WordIt = std.mem.TokenIterator(u8, .scalar);
-    const Mode = enum { Comment, O, V, Vt, Vn, F, Mtllib, Usemtl, S };
-    const map = std.static_string_map.StaticStringMap(Mode).initComptime(.{
-        .{ "#", .Comment },
-        .{ "o", .O },
-        .{ "v", .V },
-        .{ "vt", .Vt },
-        .{ "vn", .Vn },
-        .{ "f", .F },
-        .{ "s", .S },
-        .{ "mtllib", .Mtllib },
-        .{ "usemtl", .Usemtl },
-    });
+    const Mode = enum { o, v, vt, vn, f, mtllib, usemtl, s };
     vertices: std.ArrayList(Vertex),
     triangles: std.ArrayList(glup.Triangle),
+    materials: std.StringHashMap(Material),
     fn getVecF32(n: comptime_int, it: *WordIt) !@Vector(n, f32) {
         var sol: @Vector(n, f32) = undefined;
         for (0..n) |i| sol[i] = try std.fmt.parseFloat(f32, it.next().?);
         return sol;
     }
     fn processLine(sol: *ModelParser, head: []const u8, it: *WordIt) !void {
-        if (map.get(head)) |x| switch (x) {
-            .Comment => {},
-            .O => std.debug.print("Parsing Part: {s}\n", .{it.next().?}),
-            .V => try sol.positions.append(try getVecF32(3, it)),
-            .Vt => try sol.texCoords.append(try getVecF32(2, it)),
-            .Vn => try sol.normals.append(try getVecF32(3, it)),
-            .F => try sol.triangles.append(try sol.parseTriangle(it)),
-            .S => {
+        if (std.meta.stringToEnum(Mode, head)) |x| switch (x) {
+            .o => std.debug.print("Parsing Part: {s}\n", .{it.next().?}),
+            .v => try sol.positions.append(try getVecF32(3, it)),
+            .vt => try sol.texCoords.append(try getVecF32(2, it)),
+            .vn => try sol.normals.append(try getVecF32(3, it)),
+            .f => try sol.triangles.append(try sol.parseTriangle(it)),
+            .s => {
                 // Smoothing group
             },
-            .Mtllib => {
-                const filename = it.next().?;
-                _ = filename;
-            },
-            .Usemtl => {},
+            // ToDo c_allocator?
+            .mtllib => try Material.process(it.next().?, &sol.materials),
+            .usemtl => {},
         } else std.debug.print("Ignored head: {s}\n", .{head});
     }
     fn init(filePath: []const u8, allocator: std.mem.Allocator) !@This() {
@@ -153,11 +138,67 @@ const Model = struct {
             }
             ind += 1;
         }
-        return .{ .vertices = sol.vertices, .triangles = sol.triangles };
+        return .{
+            .vertices = sol.vertices,
+            .triangles = sol.triangles,
+            .materials = sol.materials,
+        };
     }
     fn deinit(self: @This()) void {
         self.vertices.deinit();
         self.triangles.deinit();
+    }
+};
+
+const Material = struct {
+    Ns: f32,
+    Ka: @Vector(3, f32),
+    Kd: @Vector(3, f32),
+    Ks: @Vector(3, f32),
+    Ke: @Vector(3, f32),
+    Ni: f32,
+    d: f32,
+    illum: f32,
+    map_Kd: []const u8,
+    map_Bump: []const u8,
+    map_Ks: []const u8,
+    const WordIt = std.mem.TokenIterator(u8, .scalar);
+    const Mode = enum { newmtl, Ns, Ka, Kd, Ks, Ke, Ni, d, illum, map_Kd, map_Bump, map_Ks };
+    fn processLine(current: *@This(), mode: Mode, it: *WordIt) !void {
+        switch (mode) {
+            .newmtl => {},
+            .Ns => current.Ns = try std.fmt.parseFloat(f32, it.next().?),
+            .Ka => current.Ka = try Model.getVecF32(3, it),
+            .Kd => current.Kd = try Model.getVecF32(3, it),
+            .Ks => current.Ks = try Model.getVecF32(3, it),
+            .Ke => current.Ke = try Model.getVecF32(3, it),
+            .Ni => current.Ni = try std.fmt.parseFloat(f32, it.next().?),
+            .d => current.d = try std.fmt.parseFloat(f32, it.next().?),
+            .illum => current.illum = try std.fmt.parseFloat(f32, it.next().?),
+            .map_Kd => current.map_Kd = it.next().?,
+            .map_Bump => current.map_Bump = it.next().?,
+            .map_Ks => current.map_Ks = it.next().?,
+        }
+    }
+    fn process(filePath: []const u8, map: *std.StringHashMap(Material)) !void {
+        var ind: u32 = 0;
+        var buff: [256]u8 = undefined;
+        var current: *@This() = undefined;
+
+        const path = try std.fmt.bufPrint(&buff, "examples/backpack/{s}", .{filePath});
+        var it = try LineIterator.init(path);
+        defer it.deinit();
+        while (try it.next()) |line| {
+            var wordIt = std.mem.tokenizeScalar(u8, line, ' ');
+            if (wordIt.next()) |head| {
+                if (std.meta.stringToEnum(Mode, head)) |x| switch (x) {
+                    .newmtl => current = (try map.getOrPut(wordIt.next().?)).value_ptr,
+                    else => processLine(current, x, &wordIt) catch
+                        @panic(try std.fmt.bufPrint(&buff, "Error line: {}", .{ind})),
+                } else std.debug.print("Ignored head: {s}\n", .{head});
+            }
+            ind += 1;
+        }
     }
 };
 
@@ -168,7 +209,11 @@ const cameraSpeed = 0.05;
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     const model = try Model.init("examples/backpack/backpack.obj", gpa.allocator());
-    // _ = model;
+    // {
+    //     var it = model.materials.iterator();
+    //     while(it.next()) |kv|
+    //         std.debug.print("material: {s}\n{}", .{kv.key_ptr.*, kv.value_ptr});
+    // }
 
     var app = try glup.App.init(800, 600, "Model Loading");
     // const c = @import("cube.zig");
