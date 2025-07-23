@@ -74,7 +74,14 @@ pub const Texture = struct {
 
         const Color = packed struct { r: u8, g: u8, b: u8, a: u8 };
         const pixels = @as([*c]Color, @alignCast(@ptrCast(image)));
-        std.mem.reverse(Color, pixels[0 .. width * height]);
+        var buff: [4096]Color = undefined;
+        for (0..height/2) |i| {
+            const j = height - i - 1;
+            @memcpy(buff[0..width], pixels[width*i..width*(i+1)]);
+            @memcpy(pixels[width*i..width*(i+1)], pixels[width*j..width*(j+1)]);
+            @memcpy(pixels[width*j..width*(j+1)], buff[0..width]);
+        }
+        // std.mem.reverse(Color, pixels[0 .. width * height]);
         // TODO Leaking memory
         if (err != 0) {
             std.debug.print("Error: {s}", .{png.lodepng_error_text(err)});
@@ -312,17 +319,15 @@ pub fn Mesh(Vertex: type) type {
                 gl.BufferData(gl.ARRAY_BUFFER, @sizeOf(Vertex) * @as(i64, @intCast(vertices.len)), vertices.ptr, gl.STATIC_DRAW);
                 gl.BindBuffer(gl.ELEMENT_ARRAY_BUFFER, EBO);
                 gl.BufferData(gl.ELEMENT_ARRAY_BUFFER, @sizeOf(Triangle) * @as(i64, @intCast(triangles.len)), triangles.ptr, gl.STATIC_DRAW);
-                var ptr: usize = 0;
-                inline for (std.meta.fields(Vertex), 0..) |field, i| {
+                inline for (@typeInfo(Vertex).@"struct".fields, 0..) |field, i| {
                     switch (field.type) {
-                        f32 => gl.VertexAttribPointer(i, 1, gl.FLOAT, gl.FALSE, @sizeOf(Vertex), ptr),
-                        @Vector(2, f32) => gl.VertexAttribPointer(i, 2, gl.FLOAT, gl.FALSE, @sizeOf(Vertex), ptr),
-                        @Vector(3, f32) => gl.VertexAttribPointer(i, 3, gl.FLOAT, gl.FALSE, @sizeOf(Vertex), ptr),
-                        @Vector(4, f32) => gl.VertexAttribPointer(i, 4, gl.FLOAT, gl.FALSE, @sizeOf(Vertex), ptr),
+                        f32 => gl.VertexAttribPointer(i, 1, gl.FLOAT, gl.FALSE, @sizeOf(Vertex), @offsetOf(Vertex, field.name)),
+                        @Vector(2, f32) => gl.VertexAttribPointer(i, 2, gl.FLOAT, gl.FALSE, @sizeOf(Vertex), @offsetOf(Vertex, field.name)),
+                        @Vector(3, f32) => gl.VertexAttribPointer(i, 3, gl.FLOAT, gl.FALSE, @sizeOf(Vertex), @offsetOf(Vertex, field.name)),
+                        @Vector(4, f32) => gl.VertexAttribPointer(i, 4, gl.FLOAT, gl.FALSE, @sizeOf(Vertex), @offsetOf(Vertex, field.name)),
                         else => @compileError("Vertex can have only fields of `VecN` type"),
                     }
                     gl.EnableVertexAttribArray(i);
-                    ptr += @sizeOf(field.type);
                 }
             }
             return .{ .VAO = VAO, .VBO = VBO, .EBO = EBO, .triCount = @intCast(triangles.len) };
