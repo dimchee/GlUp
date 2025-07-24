@@ -130,7 +130,8 @@ const Model = struct {
                 if (std.meta.stringToEnum(Mode, head)) |x| switch (x) {
                     .mtllib => {
                         try Material.process(
-                            try Material.getFilePath(filePath, wordIt.next().?),
+                            allocator,
+                            try Material.getFilePath(allocator, filePath, wordIt.next().?),
                             &sol.materials,
                         );
                     },
@@ -157,17 +158,17 @@ const Model = struct {
 };
 
 const Material = struct {
-    Ns: f32,
-    Ka: @Vector(3, f32),
-    Kd: @Vector(3, f32),
-    Ks: @Vector(3, f32),
-    Ke: @Vector(3, f32),
-    Ni: f32,
-    d: f32,
-    illum: f32,
-    map_Kd: []const u8,
-    map_Bump: []const u8,
-    map_Ks: []const u8,
+    Ns: f32 = 0,
+    Ka: @Vector(3, f32) = .{ 0, 0, 0 },
+    Kd: @Vector(3, f32) = .{ 0, 0, 0 },
+    Ks: @Vector(3, f32) = .{ 0, 0, 0 },
+    Ke: @Vector(3, f32) = .{ 0, 0, 0 },
+    Ni: f32 = 0,
+    d: f32 = 0,
+    illum: f32 = 0,
+    map_Kd: []const u8 = "",
+    map_Bump: []const u8 = "",
+    map_Ks: []const u8 = "",
     const WordIt = std.mem.TokenIterator(u8, .scalar);
     const Mode = enum { newmtl, Ns, Ka, Kd, Ks, Ke, Ni, d, illum, map_Kd, map_Bump, map_Ks };
     fn processLine(self: *@This(), mode: Mode, it: *WordIt) !void {
@@ -183,14 +184,14 @@ const Material = struct {
             .illum => self.illum = try std.fmt.parseFloat(f32, it.next().?),
         }
     }
-    fn getFilePath(currentFilePath: []const u8, subPath: []const u8) ![]const u8 {
-        // page_allocator?
-        return std.fmt.allocPrint(std.heap.page_allocator, "{s}/{s}", .{
+    fn getFilePath(allocator: std.mem.Allocator, currentFilePath: []const u8, subPath: []const u8) ![]const u8 {
+        // ToDo leak?
+        return std.fmt.allocPrint(allocator, "{s}/{s}", .{
             std.fs.path.dirname(currentFilePath) orelse "",
             subPath,
         });
     }
-    fn process(filePath: []const u8, map: *std.StringHashMap(Material)) !void {
+    fn process(allocator: std.mem.Allocator, filePath: []const u8, map: *std.StringHashMap(Material)) !void {
         var ind: u32 = 0;
         var buff: [256]u8 = undefined;
         var current: *@This() = undefined;
@@ -201,10 +202,14 @@ const Material = struct {
             var wordIt = std.mem.tokenizeScalar(u8, line, ' ');
             if (wordIt.next()) |head| {
                 if (std.meta.stringToEnum(Mode, head)) |x| switch (x) {
-                    .newmtl => current = (try map.getOrPut(wordIt.next().?)).value_ptr,
-                    .map_Kd => current.map_Kd = try getFilePath(filePath, wordIt.next().?),
-                    .map_Bump => current.map_Bump = try getFilePath(filePath, wordIt.next().?),
-                    .map_Ks => current.map_Ks = try getFilePath(filePath, wordIt.next().?),
+                    .newmtl => current = (try map.getOrPutValue(
+                        // ToDo leak?
+                        try allocator.dupe(u8, wordIt.next().?),
+                        .{},
+                    )).value_ptr,
+                    .map_Kd => current.map_Kd = try getFilePath(allocator, filePath, wordIt.next().?),
+                    .map_Bump => current.map_Bump = try getFilePath(allocator, filePath, wordIt.next().?),
+                    .map_Ks => current.map_Ks = try getFilePath(allocator, filePath, wordIt.next().?),
                     else => processLine(current, x, &wordIt) catch
                         @panic(try std.fmt.bufPrint(&buff, "Error line: {}", .{ind})),
                 } else {} //std.debug.print("Ignored head: {s}\n", .{head});
@@ -233,7 +238,7 @@ const Uniforms = struct {
 
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    const model = try Model.init("examples/backpack/backpack.obj", gpa.allocator());
+    const model = try Model.init("examples/cube/cube.obj", gpa.allocator());
     // {
     //     var it = model.materials.iterator();
     //     while (it.next()) |kv| {
@@ -256,9 +261,9 @@ pub fn main() !void {
     var texWatch = glup.Watch.init(texPath);
     var tex = try glup.Texture.init(texWatch.path, 0);
 
-    var camera = glup.Camera.init(.{ 0, 0, -3 }, .{ 0, 0, 1 });
+    var camera = glup.Camera.init(.{ -3, 3, -3 }, .{ 1, -1, 1 });
     glup.gl.Enable(glup.gl.DEPTH_TEST);
-    glup.Mouse.setFpsMode(app.window);
+    // glup.Mouse.setFpsMode(app.window);
     while (app.windowOpened()) |window| {
         glup.gl.Clear(glup.gl.COLOR_BUFFER_BIT | glup.gl.DEPTH_BUFFER_BIT);
         glup.gl.ClearColor(1, 0, 0, 0);
@@ -271,18 +276,18 @@ pub fn main() !void {
             tex.deinit();
             tex = try glup.Texture.init(texWatch.path, 0);
         }
-        const mouseOffsets = glup.Mouse.getOffsets();
-        camera.update(.{
-            .position = vec.scale(glup.Keyboard.movement3D(window), cameraSpeed),
-            .rotation = vec.scale(mouseOffsets.position, rotationSensitivity),
-            .zoom = mouseOffsets.scroll[1],
-        });
+        _ = window;
+        // const mouseOffsets = glup.Mouse.getOffsets();
+        // camera.update(.{
+        //     .position = vec.scale(glup.Keyboard.movement3D(window), cameraSpeed),
+        //     .rotation = vec.scale(mouseOffsets.position, rotationSensitivity),
+        //     .zoom = mouseOffsets.scroll[1],
+        // });
         sh.use(.{
             .view = camera.view(),
             .projection = camera.projection(800, 600),
             .diffuse = tex,
         });
         cube.draw();
-        // std.debug.print("test", .{});
     }
 }
