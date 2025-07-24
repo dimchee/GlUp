@@ -36,124 +36,126 @@ const LineIterator = struct {
         self.file.close();
     }
 };
+fn getFilePath(allocator: std.mem.Allocator, currentFilePath: []const u8, subPath: []const u8) ![]const u8 {
+    // ToDo leak?
+    return std.fmt.allocPrint(allocator, "{s}/{s}", .{
+        std.fs.path.dirname(currentFilePath) orelse "",
+        subPath,
+    });
+}
+const WordIt = std.mem.TokenIterator(u8, .scalar);
+fn parseVecF32(n: comptime_int, it: *WordIt) !@Vector(n, f32) {
+    var sol: @Vector(n, f32) = undefined;
+    for (0..n) |i| sol[i] = try std.fmt.parseFloat(f32, it.next().?);
+    return sol;
+}
 
 const ModelParser = struct {
-    const UnfinishedVertex = struct {
-        position: i64,
-        texCoord: i64,
-        normal: i64,
-    };
+    const Mode = enum { o, v, vt, vn, f, mtllib, usemtl, s };
     positions: std.ArrayList(@Vector(3, f32)),
     texCoords: std.ArrayList(@Vector(2, f32)),
     normals: std.ArrayList(@Vector(3, f32)),
-    vertIndex: std.AutoHashMap(UnfinishedVertex, u32),
-    vertices: std.ArrayList(Vertex),
+    vertices: std.ArrayList(struct { position: u32, texCoord: u32, normal: u32 }),
     triangles: std.ArrayList(glup.Triangle),
-    materials: std.StringHashMap(Material),
-    fn init(arena: *std.heap.ArenaAllocator, allocator: std.mem.Allocator) @This() {
-        const alloc = arena.allocator();
+    materials: std.ArrayList([]const u8),
+    allocator: std.mem.Allocator,
+    filePath: []const u8,
+    fn init(allocator: std.mem.Allocator, filePath: []const u8) @This() {
         return .{
-            .positions = .init(alloc),
-            .texCoords = .init(alloc),
-            .normals = .init(alloc),
-            .vertIndex = .init(alloc),
+            .allocator = allocator,
+            .filePath = filePath,
+            .positions = .init(allocator),
+            .texCoords = .init(allocator),
+            .normals = .init(allocator),
             .vertices = .init(allocator),
             .triangles = .init(allocator),
             .materials = .init(allocator),
         };
     }
-    fn getAt(T: type, slice: []T, index: i64) T {
-        return slice[if (index < 0) slice.len + 1 - @abs(index) else @intCast(index)];
+    fn parseIndex(sliceLen: usize, str: []const u8) !u32 {
+        const index: i32 = try std.fmt.parseInt(i32, str, 10) - 1;
+        return if (index < 0) @as(u32, @intCast(sliceLen)) + 1 - @abs(index) else @abs(index);
     }
     fn parseVertex(self: *@This(), str: []const u8) !u32 {
         var it = std.mem.splitScalar(u8, str, '/');
-        const v = UnfinishedVertex{
-            .position = try std.fmt.parseInt(i64, it.next().?, 10) - 1,
-            .texCoord = try std.fmt.parseInt(i64, it.next().?, 10) - 1,
-            .normal = try std.fmt.parseInt(i64, it.next().?, 10) - 1,
-        };
-        var ind: u32 = undefined;
-        if (self.vertIndex.get(v)) |i| {
-            ind = i;
-        } else {
-            ind = @intCast(self.vertices.items.len);
-            try self.vertIndex.put(v, ind);
-            try self.vertices.append(.{
-                .position = getAt(@Vector(3, f32), self.positions.items, v.position),
-                .texCoord = getAt(@Vector(2, f32), self.texCoords.items, v.texCoord),
-                .normal = getAt(@Vector(3, f32), self.normals.items, v.normal),
-            });
-        }
+        const ind: u32 = @intCast(self.vertices.items.len);
+        try self.vertices.append(.{
+            .position = try parseIndex(self.positions.items.len, it.next().?),
+            .texCoord = try parseIndex(self.texCoords.items.len, it.next().?),
+            .normal = try parseIndex(self.normals.items.len, it.next().?),
+        });
         return ind;
     }
-    fn parseTriangle(self: *@This(), it: *Model.WordIt) !glup.Triangle {
+    fn parseTriangle(self: *@This(), it: *WordIt) !glup.Triangle {
         return .{
             try self.parseVertex(it.next().?),
             try self.parseVertex(it.next().?),
             try self.parseVertex(it.next().?),
         };
+    }
+    fn parseFilePath(self: *@This(), it: *WordIt) ![]const u8 {
+        return getFilePath(self.allocator, self.filePath, it.next().?);
+    }
+    fn parseDataLine(self: *@This(), mode: Mode, it: *WordIt) !void {
+        switch (mode) {
+            .o, .s, .usemtl => unreachable,
+            .mtllib => try self.materials.append(try self.parseFilePath(it)),
+            .v => try self.positions.append(try parseVecF32(3, it)),
+            .vt => try self.texCoords.append(try parseVecF32(2, it)),
+            .vn => try self.normals.append(try parseVecF32(3, it)),
+            .f => try self.triangles.append(try self.parseTriangle(it)),
+        }
+    }
+    fn parseLine(self: *@This(), line: []const u8) !void {
+        var it = std.mem.tokenizeScalar(u8, line, ' ');
+        if (it.next()) |head| if (std.meta.stringToEnum(Mode, head)) |x| switch (x) {
+            .o => {},
+            .s => {},
+            .usemtl => {},
+            else => try parseDataLine(self, x, &it),
+        };
+    }
+    fn parse(self: *@This()) !void {
+        var it = try LineIterator.init(self.filePath);
+        while (try it.next()) |line| try self.parseLine(line);
+    }
+    fn getVertices(self: *@This(), alloc: std.mem.Allocator) ![]Vertex {
+        var sol = try alloc.alloc(Vertex, self.vertices.items.len);
+        for (sol[0..], self.vertices.items) |*x, val|
+            x.* = .{
+                .position = self.positions.items[val.position],
+                .normal = self.normals.items[val.normal],
+                .texCoord = self.texCoords.items[val.texCoord],
+            };
+        return sol;
     }
 };
 
 const Model = struct {
-    const WordIt = std.mem.TokenIterator(u8, .scalar);
-    const Mode = enum { o, v, vt, vn, f, mtllib, usemtl, s };
-    vertices: std.ArrayList(Vertex),
-    triangles: std.ArrayList(glup.Triangle),
+    vertices: []Vertex,
+    triangles: []glup.Triangle,
     materials: std.StringHashMap(Material),
-    fn getVecF32(n: comptime_int, it: *WordIt) !@Vector(n, f32) {
-        var sol: @Vector(n, f32) = undefined;
-        for (0..n) |i| sol[i] = try std.fmt.parseFloat(f32, it.next().?);
-        return sol;
-    }
-    fn processLine(sol: *ModelParser, mode: Mode, it: *WordIt) !void {
-        switch (mode) {
-            .o, .s, .mtllib, .usemtl => @panic("Already handled!"),
-            .v => try sol.positions.append(try getVecF32(3, it)),
-            .vt => try sol.texCoords.append(try getVecF32(2, it)),
-            .vn => try sol.normals.append(try getVecF32(3, it)),
-            .f => try sol.triangles.append(try sol.parseTriangle(it)),
-        }
-    }
+    allocator: std.mem.Allocator,
     fn init(filePath: []const u8, allocator: std.mem.Allocator) !@This() {
         var arena = std.heap.ArenaAllocator.init(allocator);
         defer arena.deinit();
-        var sol: ModelParser = ModelParser.init(&arena, allocator);
+        var sol = ModelParser.init(arena.allocator(), filePath);
+        try sol.parse();
+        var materials = std.StringHashMap(Material).init(allocator);
+        for (sol.materials.items) |x|
+            try Material.process(allocator, x, &materials);
 
-        var ind: u32 = 0;
-        var it = try LineIterator.init(filePath);
-        defer it.deinit();
-        while (try it.next()) |line| {
-            var buff: [128]u8 = undefined;
-            var wordIt = std.mem.tokenizeScalar(u8, line, ' ');
-            if (wordIt.next()) |head| {
-                if (std.meta.stringToEnum(Mode, head)) |x| switch (x) {
-                    .mtllib => {
-                        try Material.process(
-                            allocator,
-                            try Material.getFilePath(allocator, filePath, wordIt.next().?),
-                            &sol.materials,
-                        );
-                    },
-                    .o => {}, // std.debug.print("Parsing Part: {s}\n", .{it.next().?}),
-                    // Smoothing group
-                    .s => {},
-                    .usemtl => {},
-                    else => processLine(&sol, x, &wordIt) catch
-                        @panic(try std.fmt.bufPrint(&buff, "Error line: {}", .{ind})),
-                };
-            } else {} //std.debug.print("Ignored head: {s}\n", .{head});
-            ind += 1;
-        }
         return .{
-            .vertices = sol.vertices,
-            .triangles = sol.triangles,
-            .materials = sol.materials,
+            .allocator = allocator,
+            .vertices = try ModelParser.getVertices(&sol, allocator),
+            .triangles = try allocator.dupe(glup.Triangle, sol.triangles.items),
+            .materials = materials,
         };
     }
     fn deinit(self: @This()) void {
-        self.vertices.deinit();
-        self.triangles.deinit();
+        self.allocator.free(self.vertices);
+        self.allocator.free(self.triangles);
+        self.materials.deinit();
     }
 };
 
@@ -169,27 +171,19 @@ const Material = struct {
     map_Kd: []const u8 = "",
     map_Bump: []const u8 = "",
     map_Ks: []const u8 = "",
-    const WordIt = std.mem.TokenIterator(u8, .scalar);
     const Mode = enum { newmtl, Ns, Ka, Kd, Ks, Ke, Ni, d, illum, map_Kd, map_Bump, map_Ks };
     fn processLine(self: *@This(), mode: Mode, it: *WordIt) !void {
         switch (mode) {
             .newmtl, .map_Kd, .map_Ks, .map_Bump => @panic("Already handled!"),
             .Ns => self.Ns = try std.fmt.parseFloat(f32, it.next().?),
-            .Ka => self.Ka = try Model.getVecF32(3, it),
-            .Kd => self.Kd = try Model.getVecF32(3, it),
-            .Ks => self.Ks = try Model.getVecF32(3, it),
-            .Ke => self.Ke = try Model.getVecF32(3, it),
+            .Ka => self.Ka = try parseVecF32(3, it),
+            .Kd => self.Kd = try parseVecF32(3, it),
+            .Ks => self.Ks = try parseVecF32(3, it),
+            .Ke => self.Ke = try parseVecF32(3, it),
             .Ni => self.Ni = try std.fmt.parseFloat(f32, it.next().?),
             .d => self.d = try std.fmt.parseFloat(f32, it.next().?),
             .illum => self.illum = try std.fmt.parseFloat(f32, it.next().?),
         }
-    }
-    fn getFilePath(allocator: std.mem.Allocator, currentFilePath: []const u8, subPath: []const u8) ![]const u8 {
-        // ToDo leak?
-        return std.fmt.allocPrint(allocator, "{s}/{s}", .{
-            std.fs.path.dirname(currentFilePath) orelse "",
-            subPath,
-        });
     }
     fn process(allocator: std.mem.Allocator, filePath: []const u8, map: *std.StringHashMap(Material)) !void {
         var ind: u32 = 0;
@@ -236,6 +230,25 @@ const Uniforms = struct {
     diffuse: glup.Texture,
 };
 
+// var rld = Reloader(.{
+//     .{ "examples/model.glsl", struct {
+//         fn init(filePath: []const u8) glup.Shader(Uniforms, Vertex) {
+//             return try glup.Shader(Uniforms, Vertex).initFromFile(filePath);
+//         }
+//         fn deinit(sh: glup.Shader(Uniforms, Vertex)) void {
+//             sh.deinit();
+//         }
+//     } },
+//     .{ "examples/model.glsl", struct {
+//         fn init(filePath: []const u8) glup.Shader(Uniforms, Vertex) {
+//             return try glup.Shader(Uniforms, Vertex).initFromFile(filePath);
+//         }
+//         fn deinit(sh: glup.Shader(Uniforms, Vertex)) void {
+//             sh.deinit();
+//         }
+//     } },
+// });
+
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     const model = try Model.init("examples/cube/cube.obj", gpa.allocator());
@@ -246,9 +259,11 @@ pub fn main() !void {
     //         std.debug.print("material_Kd: {s}\n", .{kv.value_ptr.map_Kd});
     //     }
     // }
+    for (model.vertices) |v| std.debug.print("v: {}\n", .{v});
+    for (model.triangles) |t| std.debug.print("t: {}\n", .{t});
 
     var app = try glup.App.init(800, 600, "Model Loading");
-    const cube = glup.Mesh(Vertex).init(model.vertices.items, model.triangles.items);
+    const cube = glup.Mesh(Vertex).init(model.vertices, model.triangles);
     // for(model.vertices.items, 0..) |v, i| std.debug.print("{}v: {}\n", .{i, v});
     // for(model.triangles.items) |t| std.debug.print("tri: {}\n", .{t});
     var shWatch = glup.Watch.init("examples/model.glsl");
