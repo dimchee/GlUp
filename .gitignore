@@ -8,3 +8,4 @@ zig-out/
 /docgen_tmp/
 .direnv/
 output.glsl
+examples/rungholt
