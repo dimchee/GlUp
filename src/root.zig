@@ -2,6 +2,7 @@ const std = @import("std");
 pub const gl = @import("gl");
 pub const glfw = @import("glfw");
 pub const zm = @import("zm");
+pub const obj = @import("obj.zig");
 
 pub const Vec2 = zm.Vec2f;
 pub const Vec3 = zm.Vec3f;
