@@ -76,11 +76,11 @@ pub const Texture = struct {
         const Color = packed struct { r: u8, g: u8, b: u8, a: u8 };
         const pixels = @as([*c]Color, @alignCast(@ptrCast(image)));
         var buff: [4096]Color = undefined;
-        for (0..height/2) |i| {
+        for (0..height / 2) |i| {
             const j = height - i - 1;
-            @memcpy(buff[0..width], pixels[width*i..width*(i+1)]);
-            @memcpy(pixels[width*i..width*(i+1)], pixels[width*j..width*(j+1)]);
-            @memcpy(pixels[width*j..width*(j+1)], buff[0..width]);
+            @memcpy(buff[0..width], pixels[width * i .. width * (i + 1)]);
+            @memcpy(pixels[width * i .. width * (i + 1)], pixels[width * j .. width * (j + 1)]);
+            @memcpy(pixels[width * j .. width * (j + 1)], buff[0..width]);
         }
         // std.mem.reverse(Color, pixels[0 .. width * height]);
         // TODO Leaking memory
@@ -96,7 +96,7 @@ pub const Texture = struct {
         gl.ActiveTexture(gl.TEXTURE0 + self.slot);
         gl.BindTexture(gl.TEXTURE_2D, self.id);
     }
-    pub fn deinit(self: @This()) void {
+    pub fn deinit(self: *@This()) void {
         var id = [_]u32{self.id};
         gl.DeleteTextures(1, &id);
     }
@@ -288,7 +288,7 @@ pub fn Shader(Uniforms: type, Vertex: type) type {
                 loc += comptime uniformLen(field.type);
             }
         }
-        pub fn deinit(self: @This()) void {
+        pub fn deinit(self: *@This()) void {
             gl.DeleteProgram(self.id);
         }
     };
@@ -333,7 +333,7 @@ pub fn Mesh(Vertex: type) type {
             }
             return .{ .VAO = VAO, .VBO = VBO, .EBO = EBO, .triCount = @intCast(triangles.len) };
         }
-        pub fn deinit(self: @This()) void {
+        pub fn deinit(self: *@This()) void {
             var VAO = [_]u32{self.VAO};
             var VBO = [_]u32{self.VBO};
             var EBO = [_]u32{self.EBO};
@@ -368,7 +368,7 @@ pub const App = struct {
         Mouse.init(window);
         return .{ .window = window };
     }
-    pub fn deinit(self: @This()) void {
+    pub fn deinit(self: *@This()) void {
         std.heap.c_allocator.destroy(self.procs);
         gl.makeProcTableCurrent(null);
         glfw.makeContextCurrent(null);
@@ -411,6 +411,90 @@ pub const Watch = struct {
         return true;
     }
 };
+
+pub fn FileReloader(xs: anytype) type {
+    const len = @typeInfo(@TypeOf(xs)).@"struct".fields.len;
+    const fs = @typeInfo(@TypeOf(xs)).@"struct".fields;
+    var dataFs: [len]std.builtin.Type.StructField = undefined;
+    var watchFs: [len]std.builtin.Type.StructField = undefined;
+    const filePaths = x: {
+        var sol: [len][]const u8 = undefined;
+        for (fs, sol[0..]) |f, *path| path.* = @field(xs, f.name)[0];
+        break :x sol;
+    };
+    const InitDeinits = x: {
+        var sol: [len]type = undefined;
+        for (fs, sol[0..]) |f, *T| {
+            if (@typeInfo(f.type).@"struct".is_tuple == false) @compileError("...");
+            if (@typeInfo(f.type).@"struct".fields.len != 2) @compileError("...");
+            const InitDeinit = @field(xs, f.name)[1];
+            if (!@hasDecl(InitDeinit, "init")) @compileError("...");
+            if (!@hasDecl(InitDeinit, "deinit")) @compileError("...");
+            T.* = InitDeinit;
+        }
+        break :x sol;
+    };
+    for (fs, 0..) |f, i| {
+        const initI = @typeInfo(@TypeOf(InitDeinits[i].init)).@"fn";
+        const deinitI = @typeInfo(@TypeOf(InitDeinits[i].deinit)).@"fn";
+        if (initI.params.len != 1 or initI.params[0].type != []const u8)
+            @compileError("...");
+        const rt = initI.return_type.?;
+        // ToDo
+        // const T = if (@typeInfo(rt) != .@"struct") @typeInfo(rt).error_union.payload else rt;
+        const T = @typeInfo(rt).error_union.payload;
+        // ToDo expect pointer, don't use std.meta.Child
+        if (deinitI.params.len != 1 or T != std.meta.Child(deinitI.params[0].type.?))
+            @compileError("...");
+        dataFs[i] = std.builtin.Type.StructField{
+            .type = T,
+            .name = f.name,
+            .alignment = 0, // Maybe not 0?
+            .default_value_ptr = null,
+            .is_comptime = false,
+        };
+        watchFs[i] = std.builtin.Type.StructField{
+            .type = Watch,
+            .name = f.name,
+            .alignment = 0, // Maybe not 0?
+            .default_value_ptr = &Watch.init(filePaths[i]),
+            .is_comptime = false,
+        };
+    }
+    const Watches = @Type(.{ .@"struct" = .{
+        .layout = .auto,
+        .fields = &watchFs,
+        .is_tuple = false,
+        .decls = &.{}
+    } });
+    const Data = @Type(.{ .@"struct" = .{
+        .layout = .auto,
+        .fields = &dataFs,
+        .is_tuple = false,
+        .decls = &.{},
+    } });
+    return struct {
+        data: Data,
+        watches: Watches,
+        pub fn init() !@This() {
+            var data: Data = undefined;
+            inline for (fs, InitDeinits, filePaths) |f, ID, path|
+                @field(data, f.name) = try ID.init(path);
+            return .{
+                .data = data,
+                .watches = .{},
+            };
+        }
+        pub fn update(self: *@This()) !void {
+            inline for (fs, InitDeinits) |f, ID|
+                if (try @field(self.watches, f.name).changed()) {
+                    ID.deinit(&@field(self.data, f.name));
+                    const path = @field(self.watches, f.name).path;
+                    @field(self.data, f.name) = try ID.init(path);
+                };
+        }
+    };
+}
 
 pub fn Reloader(fns: anytype, postReload: *const fn (*std.DynLib) void) type {
     const soPath: []const u8 = "zig-out/lib/libreloadable.so";
