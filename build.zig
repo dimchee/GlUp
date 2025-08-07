@@ -17,6 +17,7 @@ pub fn build(b: *std.Build) void {
     const glfw = b.dependency("zglfw", opts);
     const zm = b.dependency("zm", opts);
     const lodepng = b.dependency("lodepng", opts);
+    const glTF = b.dependency("glTF", opts);
 
     const cp = b.addSystemCommand(&.{"cp"});
     cp.addFileArg(lodepng.path("lodepng.cpp"));
@@ -47,6 +48,7 @@ pub fn build(b: *std.Build) void {
     mod.addImport("gl", gl_bindings);
     mod.addImport("glfw", glfw.module("glfw"));
     mod.addImport("zm", zm.module("zm"));
+    mod.addImport("glTF", glTF.module("glTF"));
     mod.linkLibrary(glfw.artifact("zglfw"));
 
     for (examples) |name| {
@@ -65,7 +67,7 @@ pub fn build(b: *std.Build) void {
         b.installArtifact(example);
         const run_cmd = b.addRunArtifact(example);
         b.step(name, "Run example").dependOn(&run_cmd.step);
-        if (std.mem.eql(u8, name, "model")) {
+        if (std.mem.eql(u8, name, "model_gltf")) {
             b.step("run", "Run").dependOn(&run_cmd.step);
             const example_mod = b.createModule(.{
                 .root_source_file = b.path(path catch @panic("...")),
@@ -102,4 +104,5 @@ const examples = [_][]const u8{
     "lighting_maps",
     "light_casters",
     "model",
+    "model_gltf",
 };

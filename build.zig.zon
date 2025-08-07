@@ -26,6 +26,7 @@
             .url = "https://github.com/zig-gamedev/ztracy/archive/master.tar.gz",
             .hash = "ztracy-0.14.0-dev-zHJSq1oQFwCAq2LhbqsBUmZAipMzsD8UfKL5Etc_OJMb",
         },
+        .glTF = .{ .path = "../glTF.zig" }, // ToDo add to github
     },
     .paths = .{
         "build.zig",

@@ -3,6 +3,8 @@ pub const gl = @import("gl");
 pub const glfw = @import("glfw");
 pub const zm = @import("zm");
 pub const obj = @import("obj.zig");
+pub const glTF = @import("glTF");
+// ToDo Uniform Buffer Objects
 
 pub const Vec2 = zm.Vec2f;
 pub const Vec3 = zm.Vec3f;
@@ -17,7 +19,7 @@ pub const Utils = struct {
     fn fileContent(fileName: []const u8) ![]u8 {
         return std.fs.cwd().readFileAlloc(std.heap.c_allocator, fileName, 100000);
     }
-    fn generate(gen: fn (c_int, [*]u32) void) u32 {
+    pub fn generate(gen: fn (c_int, [*]u32) void) u32 {
         var x: [1]u32 = undefined;
         gen(1, &x);
         return x[0];
@@ -465,7 +467,7 @@ pub fn FileReloader(xs: anytype) type {
         .layout = .auto,
         .fields = &watchFs,
         .is_tuple = false,
-        .decls = &.{}
+        .decls = &.{},
     } });
     const Data = @Type(.{ .@"struct" = .{
         .layout = .auto,
