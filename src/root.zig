@@ -53,6 +53,13 @@ pub const Utils = struct {
         const ind = std.mem.lastIndexOfScalar(u8, str, '.') orelse -1;
         return str[ind + 1 ..];
     }
+    pub fn getFilePath(allocator: std.mem.Allocator, currentFilePath: []const u8, subPath: []const u8) ![]const u8 {
+        // ToDo leak?
+        return std.fmt.allocPrint(allocator, "{s}/{s}", .{
+            std.fs.path.dirname(currentFilePath) orelse "",
+            subPath,
+        });
+    }
 };
 
 pub const Texture = struct {

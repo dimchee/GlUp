@@ -1,6 +1,7 @@
 const std = @import("std");
 
 const glup = @import("glup");
+const gl = glup.gl;
 const vec = glup.zm.vec;
 
 const rotationSensitivity = 0.002;
@@ -38,106 +39,108 @@ const Reloader = glup.FileReloader(.{
     } },
 });
 
-pub fn toLen(x: glup.glTF.Accessor.Type) i32 {
-    return switch (x) {
-        .SCALAR => 1,
-        .VEC2 => 2,
-        .VEC3 => 3,
-        .VEC4, .MAT2 => 4,
-        .MAT3 => 9,
-        .MAT4 => 16,
-    };
-}
+const Mesh = struct {
+    VAOs: []u32,
+    allocator: std.mem.Allocator,
+    gltf: glup.glTF.Mesh,
+    pub fn init(alloc: std.mem.Allocator, mesh: glup.glTF.Mesh, gltf: *const glup.glTF.GlTF, buffers: []u32) !@This() {
+        const VAOs = try alloc.alloc(u32, mesh.primitives.len);
+        gl.GenVertexArrays(@intCast(VAOs.len), VAOs.ptr);
+
+        for (mesh.primitives, VAOs) |p, VAO| {
+            gl.BindVertexArray(VAO);
+            defer glup.gl.BindVertexArray(0);
+
+            var it = p.attributes.object.iterator();
+            var i: u32 = 0;
+            while (it.next()) |kv| : (i += 1) {
+                // const name = kv.key_ptr;
+                const acc = gltf.accessors[@intCast(kv.value_ptr.integer)];
+                const bw = gltf.bufferViews[acc.bufferView.?];
+                glup.gl.BindBuffer(gl.ARRAY_BUFFER, buffers[bw.buffer]);
+                const stride = gltf.stride(acc);
+                const offset: usize = @intCast(acc.byteOffset + bw.byteOffset);
+                const t: u32 = @intFromEnum(acc.componentType);
+                gl.VertexAttribPointer(i, acc.type.len(), t, gl.FALSE, stride, offset);
+                gl.EnableVertexAttribArray(i);
+            }
+            if (p.indices) |inds| {
+                const acc = gltf.accessors[inds];
+                const bw = gltf.bufferViews[acc.bufferView.?];
+                std.debug.assert(glup.gl.ELEMENT_ARRAY_BUFFER == @intFromEnum(bw.target.?));
+                std.debug.assert(bw.byteOffset + acc.byteOffset == 0);
+                glup.gl.BindBuffer(glup.gl.ELEMENT_ARRAY_BUFFER, buffers[bw.buffer]);
+            }
+        }
+        gl.BindBuffer(gl.ARRAY_BUFFER, 0);
+        glup.gl.BindBuffer(glup.gl.ELEMENT_ARRAY_BUFFER, 0);
+        return .{ .VAOs = VAOs, .allocator = alloc, .gltf = mesh };
+    }
+    pub fn draw(self: *const @This(), gltf: *const glup.glTF.GlTF) void {
+        for (self.gltf.primitives, self.VAOs) |p, VAO| {
+            glup.gl.BindVertexArray(VAO);
+            defer glup.gl.BindVertexArray(0);
+            const mode = @intFromEnum(p.mode);
+            if (p.indices) |inds| {
+                const acc = gltf.accessors[inds];
+                const bw = gltf.bufferViews[acc.bufferView.?];
+                const offset = bw.byteOffset + acc.byteOffset;
+                const ct = @intFromEnum(acc.componentType);
+                glup.gl.DrawElements(mode, @intCast(acc.count), ct, offset);
+            } else {
+                const accInd = p.attributes.object.iterator().values[0].integer;
+                const acc = gltf.accessors[@intCast(accInd)];
+                glup.gl.DrawArrays(mode, 0, @intCast(acc.count));
+            }
+        }
+    }
+    pub fn deinit(self: *const @This()) void {
+        gl.DeleteVertexArrays(self.VAOs.len, self.VAOs.ptr);
+        self.allocator.free(self.VAOs);
+    }
+};
 
 const Model = struct {
     const DrawMode = union(enum) {
         elements: u32,
         vertices: void,
     };
-    VAO: u32,
-    BUF: u32,
+    buffers: []u32,
     gltf: glup.glTF.Parsed,
+    allocator: std.mem.Allocator,
+    meshes: []Mesh,
     // ToDo use arena, don't save gltf
     // ToDo all asserts to gltf module as 'check'
     pub fn init(path: []const u8, alloc: std.mem.Allocator) !@This() {
-        const gl = glup.gl;
-        const BUF: u32 = glup.Utils.generate(gl.GenBuffers);
-        const VAO: u32 = glup.Utils.generate(gl.GenVertexArrays);
         const gltf = x: {
             const data = try std.fs.cwd().readFileAlloc(alloc, path, 10000000); // ToDo leak
             break :x try glup.glTF.parse(alloc, data);
         };
         const val = gltf.value;
-        for (val.buffers) |buf| {
-            const uri = try std.fmt.allocPrint(alloc, "examples/cube/{s}", .{buf.uri.?});
+        const scene = val.scenes[val.scene orelse 0]; // ToDo more than one scene
+
+        const bufs: []u32 = try alloc.alloc(u32, val.buffers.len);
+        gl.GenBuffers(@intCast(bufs.len), bufs.ptr);
+        for (val.buffers, bufs) |buf, BUF| {
+            const uri = try glup.Utils.getFilePath(alloc, path, buf.uri.?);
             const data = try std.fs.cwd().readFileAlloc(alloc, uri, buf.byteLength);
             defer alloc.free(data);
-            gl.BindVertexArray(VAO);
             gl.BindBuffer(gl.ARRAY_BUFFER, BUF);
+            defer gl.BindBuffer(gl.ARRAY_BUFFER, 0);
             gl.BufferData(gl.ARRAY_BUFFER, @as(i64, @intCast(data.len)), data.ptr, gl.STATIC_DRAW);
         }
 
-        const node = val.nodes[val.scenes[val.scene orelse 0].nodes[0]];
-        if (node.mesh == null) return error.NoMesh;
-        const mesh = val.meshes[node.mesh.?];
-        // std.debug.print("{?s}", .{mesh.name});
-        for (mesh.primitives) |p| {
-            var x: std.json.Value = p.attributes;
-            var it = x.object.iterator();
-            var i: u32 = 0;
-            while (it.next()) |kv| : (i += 1) {
-                // const name = kv.key_ptr;
-                // std.debug.print("    {} {s}\n", .{ i, name.* });
-                const acc = val.accessors[@intCast(kv.value_ptr.integer)];
-                const bw = val.bufferViews[acc.bufferView.?];
-                const stride = if (bw.byteStride) |bs|
-                    @as(i32, @intCast(bs))
-                else
-                    toLen(acc.type) * @sizeOf(f32);
-                gl.VertexAttribPointer(
-                    i,
-                    toLen(acc.type),
-                    @intFromEnum(acc.componentType),
-                    gl.FALSE,
-                    stride,
-                    @intCast(acc.byteOffset + bw.byteOffset),
-                );
-                gl.EnableVertexAttribArray(i);
-                // const offset = acc.byteOffset + bw.byteOffset;
-                // const end = offset + bw.byteLength;
-                // const sol: []f32 = @alignCast(@ptrCast(ds[offset .. end]));
-                // std.debug.print("{s}: {any}\n", .{ kv.key_ptr.*, sol });
-            }
-            if (p.indices) |inds| {
-                const acc = val.accessors[inds];
-                const bw = val.bufferViews[acc.bufferView.?];
-                std.debug.assert(gl.ELEMENT_ARRAY_BUFFER == @intFromEnum(bw.target.?));
-                std.debug.assert(bw.byteOffset + acc.byteOffset == 0);
-                gl.BindBuffer(gl.ELEMENT_ARRAY_BUFFER, BUF);
-            }
-        }
-        return .{ .VAO = VAO, .BUF = BUF, .gltf = gltf };
+        var ms = std.ArrayList(Mesh).init(alloc);
+        for (scene.nodes) |i| if (val.nodes[i].mesh) |mesh|
+            try ms.append(try Mesh.init(alloc, val.meshes[mesh], &gltf.value, bufs));
+        return .{ .buffers = bufs, .gltf = gltf, .allocator = alloc, .meshes = ms.items };
     }
     pub fn deinit(self: *const @This()) void {
         self.gltf.deinit();
+        self.allocator.free(self.buffers);
     }
     pub fn draw(self: *const @This()) !void {
-        const val = self.gltf.value;
-        const node = val.nodes[val.scenes[val.scene orelse 0].nodes[0]];
-        if (node.mesh == null) return error.NoMesh;
-        const mesh: glup.glTF.Mesh = val.meshes[node.mesh.?];
-        for (mesh.primitives) |p| {
-            if (p.indices) |inds| {
-                const acc = val.accessors[inds];
-                const bw = val.bufferViews[acc.bufferView.?];
-                const offset = bw.byteOffset + acc.byteOffset;
-                glup.gl.DrawElements(@intFromEnum(p.mode), @intCast(acc.count), @intFromEnum(acc.componentType), offset);
-            } else {
-                const accInd = p.attributes.object.iterator().values[0].integer;
-                const acc = val.accessors[@intCast(accInd)];
-                glup.gl.DrawArrays(@intFromEnum(p.mode), 0, @intCast(acc.count));
-            }
-        }
+        for (self.meshes) |m| m.draw(&self.gltf.value);
     }
 };
 
@@ -169,6 +172,5 @@ pub fn main() !void {
             .diffuse = rld.data.tex,
         });
         try model.draw();
-        // cube.draw();
     }
 }

@@ -30,13 +30,6 @@ const LineIterator = struct {
         self.file.close();
     }
 };
-fn getFilePath(allocator: std.mem.Allocator, currentFilePath: []const u8, subPath: []const u8) ![]const u8 {
-    // ToDo leak?
-    return std.fmt.allocPrint(allocator, "{s}/{s}", .{
-        std.fs.path.dirname(currentFilePath) orelse "",
-        subPath,
-    });
-}
 const WordIt = std.mem.TokenIterator(u8, .scalar);
 fn parseVecF32(n: comptime_int, it: *WordIt) !@Vector(n, f32) {
     var sol: @Vector(n, f32) = undefined;
@@ -154,7 +147,7 @@ const ObjParser = struct {
         } } else .{ .triangle = tri };
     }
     fn parseFilePath(self: *@This(), word: []const u8) ![]const u8 {
-        return getFilePath(self.allocator, self.filePath, word);
+        return glup.Utils.getFilePath(self.allocator, self.filePath, word);
     }
     fn parseLine(self: *@This(), line: []const u8) !void {
         var it = std.mem.tokenizeScalar(u8, line, ' ');
@@ -325,6 +318,9 @@ const MtlParser = struct {
     fn init(allocator: std.mem.Allocator, filePath: []const u8) @This() {
         return .{ .allocator = allocator, .filePath = filePath, .curMat = undefined };
     }
+    fn parseFilePath(self: *@This(), word: []const u8) ![]const u8 {
+        return glup.Utils.getFilePath(self.allocator, self.filePath, word);
+    }
     fn parseLine(self: *@This(), line: []const u8, map: *std.StringHashMap(Material)) !void {
         var it = std.mem.tokenizeScalar(u8, line, ' ');
         if (it.next()) |m| if (std.meta.stringToEnum(Mode, m)) |x| switch (x) {
@@ -342,9 +338,9 @@ const MtlParser = struct {
             .Ns => self.curMat.Ns = try std.fmt.parseFloat(f32, it.next().?),
             .sharpness => self.curMat.sharpness = try std.fmt.parseFloat(f32, it.next().?),
             .Ni => self.curMat.Ni = try std.fmt.parseFloat(f32, it.next().?),
-            .map_Kd => self.curMat.map_Kd = try getFilePath(self.allocator, self.filePath, it.next().?),
-            .map_Bump => self.curMat.map_Bump = try getFilePath(self.allocator, self.filePath, it.next().?),
-            .map_Ks => self.curMat.map_Ks = try getFilePath(self.allocator, self.filePath, it.next().?),
+            .map_Kd => self.curMat.map_Kd = try self.parseFilePath(it.next().?),
+            .map_Bump => self.curMat.map_Bump = try self.parseFilePath(it.next().?),
+            .map_Ks => self.curMat.map_Ks = try self.parseFilePath(it.next().?),
         };
     }
     fn parse(self: *@This(), map: *std.StringHashMap(Material)) !void {
