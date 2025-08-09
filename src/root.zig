@@ -62,6 +62,36 @@ pub const Utils = struct {
     }
 };
 
+pub const Image = struct {
+    const Color = packed struct { r: u8, g: u8, b: u8, a: u8 };
+    pixels: []Color,
+    width: u32,
+    height: u32,
+    pub fn init(filePath: []const u8) !@This() {
+        var img: struct { data: [*c]u8, width: u32, height: u32 } = undefined;
+
+        const png = @cImport(@cInclude("lodepng.h"));
+        const err = png.lodepng_decode32_file(&img.data, &img.width, &img.height, filePath.ptr);
+
+        const colors = @as([*c]Color, @alignCast(@ptrCast(img.data)));
+        const pixels = colors[0 .. img.width * img.height];
+        var buff: [4096]Color = undefined;
+        for (0..img.height / 2) |i| {
+            const w = img.width;
+            const j = img.height - i - 1;
+            @memcpy(buff[0..w], pixels[w * i .. w * (i + 1)]);
+            @memcpy(pixels[w * i .. w * (i + 1)], pixels[w * j .. w * (j + 1)]);
+            @memcpy(pixels[w * j .. w * (j + 1)], buff[0..w]);
+        }
+        if (err != 0) return error.ImageNotLoaded;
+        // std.debug.print("Error: {s}", .{png.lodepng_error_text(err)});
+        return .{ .pixels = pixels, .width = img.width, .height = img.height };
+    }
+    pub fn deinit(self: *const @This()) void {
+        const c = @cImport(@cInclude("stdlib.h"));
+        c.free(self.pixels.ptr);
+    }
+};
 pub const Texture = struct {
     id: u32,
     slot: u32,
@@ -73,30 +103,10 @@ pub const Texture = struct {
         gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.REPEAT);
         gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR);
         gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
-        var image: [*c]u8 = undefined;
-        var width: u32 = undefined;
-        var height: u32 = undefined;
-
-        const png = @cImport(@cInclude("lodepng.h"));
-        const c = @cImport(@cInclude("stdlib.h"));
-        const err = png.lodepng_decode32_file(&image, &width, &height, filePath.ptr);
-        defer c.free(image);
-
-        const Color = packed struct { r: u8, g: u8, b: u8, a: u8 };
-        const pixels = @as([*c]Color, @alignCast(@ptrCast(image)));
-        var buff: [4096]Color = undefined;
-        for (0..height / 2) |i| {
-            const j = height - i - 1;
-            @memcpy(buff[0..width], pixels[width * i .. width * (i + 1)]);
-            @memcpy(pixels[width * i .. width * (i + 1)], pixels[width * j .. width * (j + 1)]);
-            @memcpy(pixels[width * j .. width * (j + 1)], buff[0..width]);
-        }
-        // std.mem.reverse(Color, pixels[0 .. width * height]);
-        // TODO Leaking memory
-        if (err != 0) {
-            std.debug.print("Error: {s}", .{png.lodepng_error_text(err)});
-        }
-        gl.TexImage2D(gl.TEXTURE_2D, 0, gl.RGB, @intCast(width), @intCast(height), 0, gl.RGBA, gl.UNSIGNED_BYTE, image);
+        const img = try Image.init(filePath);
+        defer img.deinit();
+        // ToDo
+        gl.TexImage2D(gl.TEXTURE_2D, 0, gl.RGB, @intCast(img.width), @intCast(img.height), 0, gl.RGBA, gl.UNSIGNED_BYTE, img.pixels.ptr);
         gl.GenerateMipmap(gl.TEXTURE_2D);
 
         return .{ .id = id, .slot = slot };

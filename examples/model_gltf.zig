@@ -8,9 +8,9 @@ const rotationSensitivity = 0.002;
 const cameraSpeed = 0.05;
 
 const Uniforms = struct {
+    diffuse: glup.Texture,
     view: glup.zm.Mat4f,
     projection: glup.zm.Mat4f,
-    diffuse: glup.Texture,
 };
 
 const Vertex = extern struct {
@@ -19,13 +19,14 @@ const Vertex = extern struct {
     tangent: @Vector(4, f32),
     texCoord: @Vector(2, f32),
 };
+const Shader = glup.Shader(Uniforms, Vertex);
 
 const Reloader = glup.FileReloader(.{
     .sh = .{ "examples/model_gltf.glsl", struct {
-        pub fn init(filePath: []const u8) !glup.Shader(Uniforms, Vertex) {
+        pub fn init(filePath: []const u8) !Shader {
             return .initFromFile(filePath);
         }
-        pub fn deinit(s: *glup.Shader(Uniforms, Vertex)) void {
+        pub fn deinit(s: *Shader) void {
             s.deinit();
         }
     } },
@@ -67,8 +68,7 @@ const Mesh = struct {
             if (p.indices) |inds| {
                 const acc = gltf.accessors[inds];
                 const bw = gltf.bufferViews[acc.bufferView.?];
-                std.debug.assert(glup.gl.ELEMENT_ARRAY_BUFFER == @intFromEnum(bw.target.?));
-                std.debug.assert(bw.byteOffset + acc.byteOffset == 0);
+                // std.debug.assert(glup.gl.ELEMENT_ARRAY_BUFFER == @intFromEnum(bw.target.?)); Avocado
                 glup.gl.BindBuffer(glup.gl.ELEMENT_ARRAY_BUFFER, buffers[bw.buffer]);
             }
         }
@@ -76,10 +76,15 @@ const Mesh = struct {
         glup.gl.BindBuffer(glup.gl.ELEMENT_ARRAY_BUFFER, 0);
         return .{ .VAOs = VAOs, .allocator = alloc, .gltf = mesh };
     }
-    pub fn draw(self: *const @This(), gltf: *const glup.glTF.GlTF) void {
+    pub fn draw(self: *const @This(), gltf: *const glup.glTF.GlTF, texs: []u32) void {
         for (self.gltf.primitives, self.VAOs) |p, VAO| {
             glup.gl.BindVertexArray(VAO);
             defer glup.gl.BindVertexArray(0);
+
+            const mat = gltf.materials[p.material.?];
+            const tex = texs[mat.pbrMetallicRoughness.baseColorTexture.?.index];
+            gl.BindTexture(gl.TEXTURE_2D, tex);
+
             const mode = @intFromEnum(p.mode);
             if (p.indices) |inds| {
                 const acc = gltf.accessors[inds];
@@ -106,6 +111,7 @@ const Model = struct {
         vertices: void,
     };
     buffers: []u32,
+    textures: []u32,
     gltf: glup.glTF.Parsed,
     allocator: std.mem.Allocator,
     meshes: []Mesh,
@@ -130,17 +136,65 @@ const Model = struct {
             gl.BufferData(gl.ARRAY_BUFFER, @as(i64, @intCast(data.len)), data.ptr, gl.STATIC_DRAW);
         }
 
-        var ms = std.ArrayList(Mesh).init(alloc);
+        const images = try alloc.alloc(glup.Image, val.images.len);
+        defer {
+            for (images) |img| img.deinit();
+            alloc.free(images);
+        }
+        for (val.images, 0..) |img, i| {
+            const uri = try glup.Utils.getFilePath(alloc, path, img.uri.?);
+            images[i] = try glup.Image.init(uri);
+        }
+
+        const texs: []u32 = try alloc.alloc(u32, val.textures.len);
+        gl.GenTextures(@intCast(texs.len), texs.ptr);
+        for (val.textures, texs) |tex, TEX| {
+            gl.BindTexture(gl.TEXTURE_2D, TEX);
+            const img = images[tex.source.?];
+            const sampler = if (tex.sampler) |s| val.samplers[s] else glup.glTF.Sampler{};
+            const wrapS: i32 = @intCast(@intFromEnum(sampler.wrapS));
+            const wrapT: i32 = @intCast(@intFromEnum(sampler.wrapT));
+            const minFilter: i32 = @intCast(@intFromEnum(sampler.minFilter orelse
+                .LINEAR_MIPMAP_LINEAR));
+            const magFilter: i32 = @intCast(@intFromEnum(sampler.magFilter orelse
+                .LINEAR));
+            gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, wrapS);
+            gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, wrapT);
+            gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, minFilter);
+            gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, magFilter);
+            gl.TexImage2D(gl.TEXTURE_2D, 0, gl.RGB, @intCast(img.width), @intCast(img.height), 0, gl.RGBA, gl.UNSIGNED_BYTE, img.pixels.ptr);
+            gl.GenerateMipmap(gl.TEXTURE_2D);
+        }
+
+        // for (val.materials) |mat| {
+        //     // glup.glTF.Material
+        //     if (mat.pbrMetallicRoughness.baseColorTexture) |t| {
+        //         t.index
+        //     }
+        //     // mat.pbrMetallicRoughness.metallicRoughnessTexture.
+        // }
+
+        var meshes = std.ArrayList(Mesh).init(alloc);
         for (scene.nodes) |i| if (val.nodes[i].mesh) |mesh|
-            try ms.append(try Mesh.init(alloc, val.meshes[mesh], &gltf.value, bufs));
-        return .{ .buffers = bufs, .gltf = gltf, .allocator = alloc, .meshes = ms.items };
+            try meshes.append(try Mesh.init(alloc, val.meshes[mesh], &gltf.value, bufs));
+        return .{
+            .buffers = bufs,
+            .textures = texs,
+            .gltf = gltf,
+            .allocator = alloc,
+            .meshes = meshes.items,
+        };
     }
     pub fn deinit(self: *const @This()) void {
         self.gltf.deinit();
+        gl.DeleteBuffers(self.buffers.len, self.buffers.ptr);
+        gl.DeleteTextures(self.textures.len, self.textures.ptr);
         self.allocator.free(self.buffers);
+        self.allocator.free(self.textures);
+        self.allocator.free(self.meshes);
     }
     pub fn draw(self: *const @This()) !void {
-        for (self.meshes) |m| m.draw(&self.gltf.value);
+        for (self.meshes) |m| m.draw(&self.gltf.value, self.textures);
     }
 };
 
@@ -154,22 +208,22 @@ pub fn main() !void {
     //
     var camera = glup.Camera.init(.{ 3, 3, -3 }, .{ -1, -1, 1 });
     glup.gl.Enable(glup.gl.DEPTH_TEST);
-    // glup.Mouse.setFpsMode(app.window);
+    glup.Mouse.setFpsMode(app.window);
     while (app.windowOpened()) |window| {
         glup.gl.Clear(glup.gl.COLOR_BUFFER_BIT | glup.gl.DEPTH_BUFFER_BIT);
         glup.gl.ClearColor(1, 0, 0, 0);
         try rld.update();
-        _ = window;
-        // const mouseOffsets = glup.Mouse.getOffsets();
-        // camera.update(.{
-        //     .position = vec.scale(glup.Keyboard.movement3D(window), cameraSpeed),
-        //     .rotation = vec.scale(mouseOffsets.position, rotationSensitivity),
-        //     .zoom = mouseOffsets.scroll[1],
-        // });
+        // _ = window;
+        const mouseOffsets = glup.Mouse.getOffsets();
+        camera.update(.{
+            .position = vec.scale(glup.Keyboard.movement3D(window), cameraSpeed),
+            .rotation = vec.scale(mouseOffsets.position, rotationSensitivity),
+            .zoom = mouseOffsets.scroll[1],
+        });
         rld.data.sh.use(.{
+            .diffuse = rld.data.tex,
             .view = camera.view(),
             .projection = camera.projection(800, 600),
-            .diffuse = rld.data.tex,
         });
         try model.draw();
     }
